@@ -969,8 +969,9 @@ class PixelTiledKSampleUpscalerProvider:
                                                       tile_size=max(tile_width, tile_height), tile_cnet_strength=tile_cnet_strength)
             return (upscaler, )
         else:
-            utils.try_install_custom_node('https://github.com/BlenderNeko/ComfyUI_TiledKSampler',
-                                          "To use 'PixelTiledKSampleUpscalerProvider' node, 'BlenderNeko/ComfyUI_TiledKSampler' extension is required.")
+            #utils.try_install_custom_node('https://github.com/BlenderNeko/ComfyUI_TiledKSampler',
+            #                              "To use 'PixelTiledKSampleUpscalerProvider' node, 'BlenderNeko/ComfyUI_TiledKSampler' extension is required.")
+            #노르디의 ComfyUI를 멋대로 제부팅하여 커스텀 노드를 CPU단에 설치하는 문제가 있어서 해당 부분 주석 처리 -원경(241008)
 
             raise Exception("[ERROR] PixelTiledKSampleUpscalerProvider: ComfyUI_TiledKSampler custom node isn't installed. You must install BlenderNeko/ComfyUI_TiledKSampler extension to use this node.")
 
