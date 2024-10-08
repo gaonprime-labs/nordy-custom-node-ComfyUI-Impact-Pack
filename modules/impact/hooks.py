@@ -302,8 +302,9 @@ class InjectNoiseHook(PixelKSampleHook):
             NoisyLatentImage = nodes.NODE_CLASS_MAPPINGS["BNK_NoisyLatentImage"]
             InjectNoise = nodes.NODE_CLASS_MAPPINGS["BNK_InjectNoise"]
         else:
-            utils.try_install_custom_node('https://github.com/BlenderNeko/ComfyUI_Noise',
-                                          "To use 'NoiseInjectionHookProvider', 'ComfyUI Noise' extension is required.")
+            #utils.try_install_custom_node('https://github.com/BlenderNeko/ComfyUI_Noise',
+            #                              "To use 'NoiseInjectionHookProvider', 'ComfyUI Noise' extension is required.")
+            #노르디의 ComfyUI를 멋대로 제부팅하여 커스텀 노드를 CPU단에 설치하는 문제가 있어서 해당 부분 주석 처리 -원경(241008)
             raise Exception("'BNK_NoisyLatentImage', 'BNK_InjectNoise' nodes are not installed.")
 
         noise = NoisyLatentImage().create_noisy_latents(self.source, seed, size[3] * 8, size[2] * 8, size[0])[0]
@@ -382,8 +383,9 @@ class InjectNoiseHookForDetailer(DetailerHook):
             NoisyLatentImage = nodes.NODE_CLASS_MAPPINGS["BNK_NoisyLatentImage"]
             InjectNoise = nodes.NODE_CLASS_MAPPINGS["BNK_InjectNoise"]
         else:
-            utils.try_install_custom_node('https://github.com/BlenderNeko/ComfyUI_Noise',
-                                          "To use 'NoiseInjectionDetailerHookProvider', 'ComfyUI Noise' extension is required.")
+            #utils.try_install_custom_node('https://github.com/BlenderNeko/ComfyUI_Noise',
+            #                              "To use 'NoiseInjectionDetailerHookProvider', 'ComfyUI Noise' extension is required.")
+            #노르디의 ComfyUI를 멋대로 제부팅하여 커스텀 노드를 CPU단에 설치하는 문제가 있어서 해당 부분 주석 처리 -원경(241008)
             raise Exception("'BNK_NoisyLatentImage', 'BNK_InjectNoise' nodes are not installed.")
 
         noise = NoisyLatentImage().create_noisy_latents(self.source, seed, size[3] * 8, size[2] * 8, size[0])[0]

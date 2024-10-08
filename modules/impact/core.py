@@ -1730,8 +1730,9 @@ class IPAdapterWrapper:
             if 'IPAdapterApply' in nodes.NODE_CLASS_MAPPINGS:
                 raise Exception(f"[ERROR] 'ComfyUI IPAdapter Plus' is outdated.")
 
-            utils.try_install_custom_node('https://github.com/cubiq/ComfyUI_IPAdapter_plus',
-                                          "To use 'IPAdapterApplySEGS' node, 'ComfyUI IPAdapter Plus' extension is required.")
+            #utils.try_install_custom_node('https://github.com/cubiq/ComfyUI_IPAdapter_plus',
+            #                              "To use 'IPAdapterApplySEGS' node, 'ComfyUI IPAdapter Plus' extension is required.")
+            #노르디의 ComfyUI를 멋대로 제부팅하여 커스텀 노드를 CPU단에 설치하는 문제가 있어서 해당 부분 주석 처리 -원경(241008)
             raise Exception(f"[ERROR] To use IPAdapterApplySEGS, you need to install 'ComfyUI IPAdapter Plus'")
 
         obj = nodes.NODE_CLASS_MAPPINGS['IPAdapterAdvanced']
@@ -1794,8 +1795,9 @@ class ControlNetWrapper:
                 positive, negative, _ = acn.apply_controlnet(positive=positive, negative=negative, control_net=self.control_net, image=cnet_image,
                                                              strength=self.strength, start_percent=0.0, end_percent=1.0)
             else:
-                utils.try_install_custom_node('https://github.com/BlenderNeko/ComfyUI_TiledKSampler',
-                                              "To use 'ControlNetWrapper' for AnimateDiff, 'ComfyUI-Advanced-ControlNet' extension is required.")
+                #utils.try_install_custom_node('https://github.com/BlenderNeko/ComfyUI_TiledKSampler',
+                #                              "To use 'ControlNetWrapper' for AnimateDiff, 'ComfyUI-Advanced-ControlNet' extension is required.")
+                #노르디의 ComfyUI를 멋대로 제부팅하여 커스텀 노드를 CPU단에 설치하는 문제가 있어서 해당 부분 주석 처리 -원경(241008)
                 raise Exception("'ACN_AdvancedControlNetApply' node isn't installed.")
         else:
             positive = nodes.ControlNetApply().apply_controlnet(positive, self.control_net, cnet_image, self.strength)[0]
@@ -1854,8 +1856,9 @@ class ControlNetAdvancedWrapper:
                 positive, negative, _ = acn.apply_controlnet(positive=positive, negative=negative, control_net=self.control_net, image=cnet_image,
                                                              strength=self.strength, start_percent=self.start_percent, end_percent=self.end_percent)
             else:
-                utils.try_install_custom_node('https://github.com/BlenderNeko/ComfyUI_TiledKSampler',
-                                              "To use 'ControlNetAdvancedWrapper' for AnimateDiff, 'ComfyUI-Advanced-ControlNet' extension is required.")
+                #utils.try_install_custom_node('https://github.com/BlenderNeko/ComfyUI_TiledKSampler',
+                #                              "To use 'ControlNetAdvancedWrapper' for AnimateDiff, 'ComfyUI-Advanced-ControlNet' extension is required.")
+                #노르디의 ComfyUI를 멋대로 제부팅하여 커스텀 노드를 CPU단에 설치하는 문제가 있어서 해당 부분 주석 처리 -원경(241008)
                 raise Exception("'ACN_AdvancedControlNetApply' node isn't installed.")
         else:
             positive, negative = nodes.ControlNetApplyAdvanced().apply_controlnet(positive, negative, self.control_net, cnet_image, self.strength, self.start_percent, self.end_percent)
@@ -1875,8 +1878,9 @@ class TiledKSamplerWrapper:
         if "BNK_TiledKSampler" in nodes.NODE_CLASS_MAPPINGS:
             TiledKSampler = nodes.NODE_CLASS_MAPPINGS['BNK_TiledKSampler']
         else:
-            utils.try_install_custom_node('https://github.com/BlenderNeko/ComfyUI_TiledKSampler',
-                                          "To use 'TiledKSamplerProvider', 'Tiled sampling for ComfyUI' extension is required.")
+            #utils.try_install_custom_node('https://github.com/BlenderNeko/ComfyUI_TiledKSampler',
+            #                              "To use 'TiledKSamplerProvider', 'Tiled sampling for ComfyUI' extension is required.")
+            #노르디의 ComfyUI를 멋대로 제부팅하여 커스텀 노드를 CPU단에 설치하는 문제가 있어서 해당 부분 주석 처리 -원경(241008)
             raise Exception("'BNK_TiledKSampler' node isn't installed.")
 
         model, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise, tile_width, tile_height, tiling_strategy = self.params
@@ -1909,8 +1913,9 @@ class PixelTiledKSampleUpscaler:
         if "BNK_TiledKSampler" in nodes.NODE_CLASS_MAPPINGS:
             TiledKSampler = nodes.NODE_CLASS_MAPPINGS['BNK_TiledKSampler']
         else:
-            utils.try_install_custom_node('https://github.com/BlenderNeko/ComfyUI_TiledKSampler',
-                                          "To use 'PixelTiledKSampleUpscalerProvider', 'Tiled sampling for ComfyUI' extension is required.")
+            #utils.try_install_custom_node('https://github.com/BlenderNeko/ComfyUI_TiledKSampler',
+            #                              "To use 'PixelTiledKSampleUpscalerProvider', 'Tiled sampling for ComfyUI' extension is required.")
+            #노르디의 ComfyUI를 멋대로 제부팅하여 커스텀 노드를 CPU단에 설치하는 문제가 있어서 해당 부분 주석 처리 -원경(241008)
             raise RuntimeError("'BNK_TiledKSampler' node isn't installed.")
 
         scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise = self.params
@@ -2009,8 +2014,9 @@ class BBoxDetectorBasedOnCLIPSeg:
         if "CLIPSeg" in nodes.NODE_CLASS_MAPPINGS:
             CLIPSeg = nodes.NODE_CLASS_MAPPINGS['CLIPSeg']
         else:
-            utils.try_install_custom_node('https://github.com/biegert/ComfyUI-CLIPSeg/raw/main/custom_nodes/clipseg.py',
-                                          "To use 'CLIPSegDetectorProvider', 'CLIPSeg' extension is required.")
+            #utils.try_install_custom_node('https://github.com/biegert/ComfyUI-CLIPSeg/raw/main/custom_nodes/clipseg.py',
+            #                              "To use 'CLIPSegDetectorProvider', 'CLIPSeg' extension is required.")
+            #노르디의 ComfyUI를 멋대로 제부팅하여 커스텀 노드를 CPU단에 설치하는 문제가 있어서 해당 부분 주석 처리 -원경(241008)
             raise Exception("'CLIPSeg' node isn't installed.")
 
         if self.threshold is None:

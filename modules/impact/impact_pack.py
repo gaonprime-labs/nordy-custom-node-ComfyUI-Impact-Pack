@@ -100,8 +100,8 @@ class SAMLoader:
     def load_model(self, model_name, device_mode="auto"):
         if model_name == 'ESAM':
             if 'ESAM_ModelLoader_Zho' not in nodes.NODE_CLASS_MAPPINGS:
-                try_install_custom_node('https://github.com/ZHO-ZHO-ZHO/ComfyUI-YoloWorld-EfficientSAM',
-                                        "To use 'ESAM' model, 'ComfyUI-YoloWorld-EfficientSAM' extension is required.")
+                #try_install_custom_node('https://github.com/ZHO-ZHO-ZHO/ComfyUI-YoloWorld-EfficientSAM',
+                #                        "To use 'ESAM' model, 'ComfyUI-YoloWorld-EfficientSAM' extension is required.")
                 raise Exception("'ComfyUI-YoloWorld-EfficientSAM' node isn't installed.")
 
             esam_loader = nodes.NODE_CLASS_MAPPINGS['ESAM_ModelLoader_Zho']()

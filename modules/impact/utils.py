@@ -567,7 +567,7 @@ def apply_mask_alpha_to_pil(decoded_pil, mask):
 
     return decoded_rgba
 
-
+'''
 def try_install_custom_node(custom_node_url, msg):
     try:
         import cm_global
@@ -576,7 +576,8 @@ def try_install_custom_node(custom_node_url, msg):
     except Exception:
         print(msg)
         print(f"[Impact Pack] ComfyUI-Manager is outdated. The custom node installation feature is not available.")
-
+'''
+#노르디의 ComfyUI를 멋대로 제부팅하여 커스텀 노드를 CPU단에 설치하는 문제가 있어서 해당 부분 주석 처리 -원경(241008)
 
 # author: Trung0246 --->
 class TautologyStr(str):
