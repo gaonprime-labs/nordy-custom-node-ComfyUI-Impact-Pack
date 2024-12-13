@@ -24,37 +24,6 @@ import random
 from server import PromptServer
 
 
-@PromptServer.instance.routes.post("/upload/temp")
-async def upload_image(request):
-    upload_dir = folder_paths.get_temp_directory()
-
-    if not os.path.exists(upload_dir):
-        os.makedirs(upload_dir)
-    
-    post = await request.post()
-    image = post.get("image")
-
-    if image and image.file:
-        filename = image.filename
-        if not filename:
-            return web.Response(status=400)
-
-        split = os.path.splitext(filename)
-        i = 1
-        while os.path.exists(os.path.join(upload_dir, filename)):
-            filename = f"{split[0]} ({i}){split[1]}"
-            i += 1
-
-        filepath = os.path.join(upload_dir, filename)
-
-        with open(filepath, "wb") as f:
-            f.write(image.file.read())
-        
-        return web.json_response({"name": filename})
-    else:
-        return web.Response(status=400)
-
-
 sam_predictor = None
 default_sam_model_name = os.path.join(impact_pack.model_path, "sams", "sam_vit_b_01ec64.pth")
 
@@ -353,13 +322,16 @@ def onprompt_for_switch(json_data):
 
         cls = v['class_type']
         if cls == 'ImpactInversedSwitch':
-            select_input = v['inputs']['select']
-            if isinstance(select_input, list) and len(select_input) == 2:
-                input_node = json_data['prompt'][select_input[0]]
-                if input_node['class_type'] == 'ImpactInt' and 'inputs' in input_node and 'value' in input_node['inputs']:
-                    inversed_switch_info[k] = input_node['inputs']['value']
-            else:
-                inversed_switch_info[k] = select_input
+            if 'sel_mode' in v['inputs'] and v['inputs']['sel_mode'] and 'select' in v['inputs']:
+                select_input = v['inputs']['select']
+                if isinstance(select_input, list) and len(select_input) == 2:
+                    input_node = json_data['prompt'][select_input[0]]
+                    if input_node['class_type'] == 'ImpactInt' and 'inputs' in input_node and 'value' in input_node['inputs']:
+                        inversed_switch_info[k] = input_node['inputs']['value']
+                    else:
+                        print(f"\n##### ##### #####\n[WARN] {cls}: For the 'select' operation, only 'select_index' of the 'ImpactInversedSwitch', which is not an input, or 'ImpactInt' and 'Primitive' are allowed as inputs if 'select_on_prompt' is selected.\n##### ##### #####\n")
+                else:
+                    inversed_switch_info[k] = select_input
 
         elif cls in ['ImpactSwitch', 'LatentSwitch', 'SEGSSwitch', 'ImpactMakeImageList']:
             if 'sel_mode' in v['inputs'] and v['inputs']['sel_mode'] and 'select' in v['inputs']:
@@ -372,7 +344,7 @@ def onprompt_for_switch(json_data):
                         if isinstance(input_node['inputs']['select'], int):
                             onprompt_switch_info[k] = input_node['inputs']['select']
                         else:
-                            print(f"\n##### ##### #####\n[WARN] {cls}: For the 'select' operation, only 'select_index' of the 'ImpactSwitch', which is not an input, or 'ImpactInt' and 'Primitive' are allowed as inputs.\n##### ##### #####\n")
+                            print(f"\n##### ##### #####\n[WARN] {cls}: For the 'select' operation, only 'select_index' of the 'ImpactSwitch', which is not an input, or 'ImpactInt' and 'Primitive' are allowed as inputs if 'select_on_prompt' is selected.\n##### ##### #####\n")
                 else:
                     onprompt_switch_info[k] = select_input
 

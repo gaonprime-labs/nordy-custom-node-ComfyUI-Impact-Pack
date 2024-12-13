@@ -29,6 +29,14 @@ import impact.wildcards as wildcards
 from . import hooks
 from . import utils
 
+
+try:
+    from comfy_extras import nodes_differential_diffusion
+except Exception:
+    print(f"\n#############################################\n[Impact Pack] ComfyUI is an outdated version.\n#############################################\n")
+    raise Exception("[Impact Pack] ComfyUI is an outdated version.")
+
+
 warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is deprecated')
 
 model_path = folder_paths.models_dir
@@ -62,10 +70,10 @@ class CLIPSegDetectorProvider:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                        "text": ("STRING", {"multiline": False}),
-                        "blur": ("FLOAT", {"min": 0, "max": 15, "step": 0.1, "default": 7}),
-                        "threshold": ("FLOAT", {"min": 0, "max": 1, "step": 0.05, "default": 0.4}),
-                        "dilation_factor": ("INT", {"min": 0, "max": 10, "step": 1, "default": 4}),
+                        "text": ("STRING", {"multiline": False, "tooltip": "Enter the targets to be detected, separated by commas"}),
+                        "blur": ("FLOAT", {"min": 0, "max": 15, "step": 0.1, "default": 7, "tooltip": "Blurs the detected mask"}),
+                        "threshold": ("FLOAT", {"min": 0, "max": 1, "step": 0.05, "default": 0.4, "tooltip": "Detects only areas that are certain above the threshold."}),
+                        "dilation_factor": ("INT", {"min": 0, "max": 10, "step": 1, "default": 4, "tooltip": "Dilates the detected mask."}),
                     }
                 }
 
@@ -73,6 +81,8 @@ class CLIPSegDetectorProvider:
     FUNCTION = "doit"
 
     CATEGORY = "ImpactPack/Util"
+
+    DESCRIPTION = "Provides a detection function using CLIPSeg, which generates masks based on text prompts.\nTo use this node, the CLIPSeg custom node must be installed."
 
     def doit(self, text, blur, threshold, dilation_factor):
         if "CLIPSeg" in nodes.NODE_CLASS_MAPPINGS:
@@ -87,8 +97,10 @@ class SAMLoader:
         models = [x for x in folder_paths.get_filename_list("sams") if 'hq' not in x]
         return {
             "required": {
-                "model_name": (models + ['ESAM'], ),
-                "device_mode": (["AUTO", "Prefer GPU", "CPU"],),
+                "model_name": (models + ['ESAM'], {"tooltip": "The detection accuracy varies depending on the SAM model. ESAM can only be used if ComfyUI-YoloWorld-EfficientSAM is installed."}),
+                "device_mode": (["AUTO", "Prefer GPU", "CPU"], {"tooltip": "AUTO: Only applicable when a GPU is available. It temporarily loads the SAM_MODEL into VRAM only when the detection function is used.\n"
+                                                                           "Prefer GPU: Tries to keep the SAM_MODEL on the GPU whenever possible. This can be used when there is sufficient VRAM available.\n"
+                                                                           "CPU: Always loads only on the CPU."}),
             }
         }
 
@@ -96,6 +108,8 @@ class SAMLoader:
     FUNCTION = "load_model"
 
     CATEGORY = "ImpactPack"
+
+    DESCRIPTION = "Load the SAM (Segment Anything) model. This can be used in places that utilize SAM detection functionality, such as SAMDetector or SimpleDetector.\nThe SAM detection functionality in Impact Pack must use the SAM_MODEL loaded through this node."
 
     def load_model(self, model_name, device_mode="auto"):
         if model_name == 'ESAM':
@@ -238,13 +252,21 @@ class DetailerForEach:
         else:
             wmode, wildcard_chooser = None, None
 
-        if wmode in ['ASC', 'DSC']:
+        if wmode in ['ASC', 'DSC', 'ASC-SIZE', 'DSC-SIZE']:
             if wmode == 'ASC':
                 ordered_segs = sorted(segs[1], key=lambda x: (x.bbox[0], x.bbox[1]))
-            else:
+            elif wmode == 'DSC':
                 ordered_segs = sorted(segs[1], key=lambda x: (x.bbox[0], x.bbox[1]), reverse=True)
+            elif wmode == 'ASC-SIZE':
+                ordered_segs = sorted(segs[1], key=lambda x: (x.bbox[2]-x.bbox[0]) * (x.bbox[3]-x.bbox[1]))
+
+            else:   # wmode == 'DSC-SIZE'
+                ordered_segs = sorted(segs[1], key=lambda x: (x.bbox[2]-x.bbox[0]) * (x.bbox[3]-x.bbox[1]), reverse=True)
         else:
             ordered_segs = segs[1]
+
+        if noise_mask_feather > 0 and 'denoise_mask_function' not in model.model_options:
+            model = nodes_differential_diffusion.DifferentialDiffusion().apply(model)[0]
 
         for i, seg in enumerate(ordered_segs):
             cropped_image = crop_ndarray4(image.cpu().numpy(), seg.crop_region)  # Never use seg.cropped_image to handle overlapping area
@@ -291,6 +313,13 @@ class DetailerForEach:
                 # Negative Conditioning is placeholder such as FLUX.1
                 cropped_negative = negative
 
+            if wildcard_item and wildcard_item.strip() == '[SKIP]':
+                continue
+
+            if wildcard_item and wildcard_item.strip() == '[STOP]':
+                break
+
+            orig_cropped_image = cropped_image.clone()
             enhanced_image, cnet_pils = core.enhance_detail(cropped_image, model, clip, vae, guide_size, guide_size_for_bbox, max_size,
                                                             seg.bbox, seg_seed, steps, cfg, sampler_name, scheduler,
                                                             cropped_positive, cropped_negative, denoise, cropped_mask, force_inpaint,
@@ -310,7 +339,7 @@ class DetailerForEach:
                 # use image paste
                 image = image.cpu()
                 enhanced_image = enhanced_image.cpu()
-                tensor_paste(image, enhanced_image, (seg.crop_region[0], seg.crop_region[1]), mask)
+                tensor_paste(image, enhanced_image, (seg.crop_region[0], seg.crop_region[1]), mask)  # this code affecting to `cropped_image`.
                 enhanced_list.append(enhanced_image)
 
                 if detailer_hook is not None:
@@ -328,7 +357,7 @@ class DetailerForEach:
             else:
                 new_seg_image = None
 
-            cropped_list.append(cropped_image)
+            cropped_list.append(orig_cropped_image) # NOTE: Don't use `cropped_image`
 
             new_seg = SEG(new_seg_image, seg.cropped_mask, seg.confidence, seg.crop_region, seg.bbox, seg.label, seg.control_net_wrapper)
             new_segs.append(new_seg)
@@ -1222,6 +1251,7 @@ class IterativeLatentUpscale:
             upscale_factor_unit = max(0, (upscale_factor - 1.0) / steps)
 
         current_latent = samples
+        noise_mask = current_latent.get('noise_mask')
         scale = 1
 
         for i in range(steps-1):
@@ -1236,6 +1266,8 @@ class IterativeLatentUpscale:
             print(f"IterativeLatentUpscale[{i+1}/{steps}]: {new_w:.1f}x{new_h:.1f} (scale:{scale:.2f}) ")
             step_info = i, steps
             current_latent = upscaler.upscale_shape(step_info, current_latent, new_w, new_h, temp_prefix)
+            if noise_mask is not None:
+                current_latent['noise_mask'] = noise_mask
 
         if scale < upscale_factor:
             new_w = w*upscale_factor
@@ -1247,7 +1279,7 @@ class IterativeLatentUpscale:
 
         core.update_node_status(unique_id, "", None)
 
-        return (current_latent, upscaler.vae)
+        return current_latent, upscaler.vae
 
 
 class IterativeImageUpscale:
@@ -1630,6 +1662,8 @@ class BitwiseAndMaskForEach:
 
     CATEGORY = "ImpactPack/Operation"
 
+    DESCRIPTION = "Retains only the overlapping areas between the masks included in base_segs and the mask regions of mask_segs. SEGS with no overlapping mask areas are filtered out."
+
     def doit(self, base_segs, mask_segs):
         mask = core.segs_to_combined_mask(mask_segs)
         mask = make_3d_mask(mask)
@@ -1650,6 +1684,8 @@ class SubtractMaskForEach:
     FUNCTION = "doit"
 
     CATEGORY = "ImpactPack/Operation"
+
+    DESCRIPTION = "Removes only the overlapping areas between the masks included in base_segs and the mask regions of mask_segs. SEGS with no overlapping mask areas are filtered out."
 
     def doit(self, base_segs, mask_segs):
         mask = core.segs_to_combined_mask(mask_segs)
@@ -1674,6 +1710,25 @@ class ToBinaryMask:
     def doit(self, mask, threshold):
         mask = to_binary_mask(mask, threshold/255.0)
         return (mask,)
+
+
+class FlattenMask:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                        "masks": ("MASK",),
+                    }
+                }
+
+    RETURN_TYPES = ("MASK",)
+    FUNCTION = "doit"
+
+    CATEGORY = "ImpactPack/Operation"
+
+    def doit(self, masks):
+        masks = utils.make_3d_mask(masks)
+        masks = utils.flatten_mask(masks)
+        return (masks,)
 
 
 class BitwiseAndMask:

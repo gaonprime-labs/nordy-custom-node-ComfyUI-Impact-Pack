@@ -6,3 +6,5 @@ opencv-python-headless
 GitPython
 scipy>=1.11.4
 numpy<2
+dill
+matplotlib

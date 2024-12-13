@@ -23,22 +23,6 @@ import impact.sample_error_enhancer
 print(f"### Loading: ComfyUI-Impact-Pack ({impact.config.version})")
 
 
-def do_install():
-    import importlib
-    spec = importlib.util.spec_from_file_location('impact_install', os.path.join(os.path.dirname(__file__), 'install.py'))
-    impact_install = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(impact_install)
-
-
-# ensure dependency
-if not os.path.exists(os.path.join(subpack_path, ".git")) and os.path.exists(subpack_path):
-    print(f"### CompfyUI-Impact-Pack: corrupted subpack detected.")
-    shutil.rmtree(subpack_path)
-
-if impact.config.get_config()['dependency_version'] < impact.config.dependency_version or not os.path.exists(subpack_path):
-    print(f"### ComfyUI-Impact-Pack: Updating dependencies [{impact.config.get_config()['dependency_version']} -> {impact.config.dependency_version}]")
-    do_install()
-
 sys.path.append(subpack_path)
 
 # Core
@@ -63,10 +47,10 @@ try:
         import mmcv
         from mmdet.apis import (inference_detector, init_detector)
         from mmdet.evaluation import get_classes
-except:
-    import importlib
-    print("### ComfyUI-Impact-Pack: Reinstall dependencies (several dependencies are missing.)")
-    do_install()
+except Exception as e:
+    import logging
+    logging.error("[Impact Pack] Failed to import due to several dependencies are missing!!!!")
+    raise e
 
 
 import impact.impact_server  # to load server api
@@ -116,6 +100,7 @@ NODE_CLASS_MAPPINGS = {
     "FromDetailerPipe": FromDetailerPipe,
     "FromDetailerPipe_v2": FromDetailerPipe_v2,
     "FromDetailerPipeSDXL": FromDetailerPipe_SDXL,
+    "AnyPipeToBasic": AnyPipeToBasic,
     "ToBasicPipe": ToBasicPipe,
     "FromBasicPipe": FromBasicPipe,
     "FromBasicPipe_v2": FromBasicPipe_v2,
@@ -161,6 +146,7 @@ NODE_CLASS_MAPPINGS = {
     "ImpactSegsAndMask": SegsBitwiseAndMask,
     "ImpactSegsAndMaskForEach": SegsBitwiseAndMaskForEach,
     "EmptySegs": EmptySEGS,
+    "ImpactFlattenMask": FlattenMask,
 
     "MediaPipeFaceMeshToSEGS": MediaPipeFaceMeshToSEGS,
     "MaskToSEGS": MaskToSEGS,
@@ -237,6 +223,7 @@ NODE_CLASS_MAPPINGS = {
     "ImpactSEGSConcat": SEGSConcat,
     "ImpactSEGSPicker": SEGSPicker,
     "ImpactMakeTileSEGS": MakeTileSEGS,
+    "ImpactSEGSMerge": SEGSMerge,
 
     "SEGSDetailerForAnimateDiff": SEGSDetailerForAnimateDiff,
 
@@ -249,6 +236,9 @@ NODE_CLASS_MAPPINGS = {
     "ImpactImageBatchToImageList": ImageBatchToImageList,
     "ImpactMakeImageList": MakeImageList,
     "ImpactMakeImageBatch": MakeImageBatch,
+    "ImpactMakeAnyList": MakeAnyList,
+    "ImpactMakeMaskList": MakeMaskList,
+    "ImpactMakeMaskBatch": MakeMaskBatch,
 
     "RegionalSampler": RegionalSampler,
     "RegionalSamplerAdvanced": RegionalSamplerAdvanced,
@@ -271,6 +261,7 @@ NODE_CLASS_MAPPINGS = {
     "ImpactLogicalOperators": ImpactLogicalOperators,
     "ImpactInt": ImpactInt,
     "ImpactFloat": ImpactFloat,
+    "ImpactBoolean": ImpactBoolean,
     "ImpactValueSender": ImpactValueSender,
     "ImpactValueReceiver": ImpactValueReceiver,
     "ImpactImageInfo": ImpactImageInfo,
@@ -281,6 +272,7 @@ NODE_CLASS_MAPPINGS = {
     "ImpactStringSelector": StringSelector,
     "StringListToString": StringListToString,
     "WildcardPromptFromString": WildcardPromptFromString,
+    "ImpactExecutionOrderController": ImpactExecutionOrderController,
 
     "RemoveNoiseMask": RemoveNoiseMask,
 
@@ -314,8 +306,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ImpactSimpleDetectorSEGS_for_AD": "Simple Detector for AnimateDiff (SEGS)",
     "ImpactSimpleDetectorSEGS": "Simple Detector (SEGS)",
     "ImpactSimpleDetectorSEGSPipe": "Simple Detector (SEGS/pipe)",
-    "ImpactControlNetApplySEGS": "ControlNetApply (SEGS)",
-    "ImpactControlNetApplyAdvancedSEGS": "ControlNetApplyAdvanced (SEGS)",
+    "ImpactControlNetApplySEGS": "ControlNetApply (SEGS) - DEPRECATED",
+    "ImpactControlNetApplyAdvancedSEGS": "ControlNetApply (SEGS)",
     "ImpactIPAdapterApplySEGS": "IPAdapterApply (SEGS)",
 
     "BboxDetectorCombined_v2": "BBOX Detector (combined)",
@@ -331,6 +323,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "BitwiseAndMask": "Pixelwise(MASK & MASK)",
     "SubtractMask": "Pixelwise(MASK - MASK)",
     "AddMask": "Pixelwise(MASK + MASK)",
+    "ImpactFlattenMask": "Flatten Mask Batch",
     "DetailerForEach": "Detailer (SEGS)",
     "DetailerForEachPipe": "Detailer (SEGS/pipe)",
     "DetailerForEachDebug": "DetailerDebug (SEGS)",
@@ -353,6 +346,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "DetailerPipeToBasicPipe": "DetailerPipe -> BasicPipe",
     "EditBasicPipe": "Edit BasicPipe",
     "EditDetailerPipe": "Edit DetailerPipe",
+    "AnyPipeToBasic": "Any PIPE -> BasicPipe",
 
     "LatentPixelScale": "Latent Scale (on Pixel Space)",
     "IterativeLatentUpscale": "Iterative Upscale (Latent/on Pixel Space)",
@@ -375,6 +369,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ImpactSEGSToMaskBatch": "SEGS to Mask Batch",
     "ImpactSEGSPicker": "Picker (SEGS)",
     "ImpactMakeTileSEGS": "Make Tile SEGS",
+    "ImpactSEGSMerge": "SEGS Merge",
 
     "ImpactDecomposeSEGS": "Decompose (SEGS)",
     "ImpactAssembleSEGS": "Assemble (SEGS)",
@@ -397,13 +392,19 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ImageMaskSwitch": "Switch (images, mask)",
     "ImpactSwitch": "Switch (Any)",
     "ImpactInversedSwitch": "Inversed Switch (Any)",
+    "ImpactExecutionOrderController": "Execution Order Controller",
 
-    "MasksToMaskList": "Masks to Mask List",
-    "MaskListToMaskBatch": "Mask List to Masks",
-    "ImpactImageBatchToImageList": "Image batch to Image List",
+    "MasksToMaskList": "Mask Batch to Mask List",
+    "MaskListToMaskBatch": "Mask List to Mask Batch",
+    "ImpactImageBatchToImageList": "Image Batch to Image List",
     "ImageListToImageBatch": "Image List to Image Batch",
+
     "ImpactMakeImageList": "Make Image List",
     "ImpactMakeImageBatch": "Make Image Batch",
+    "ImpactMakeMaskList": "Make Mask List",
+    "ImpactMakeMaskBatch": "Make Mask Batch",
+    "ImpactMakeAnyList": "Make List (Any)",
+
     "ImpactStringSelector": "String Selector",
     "StringListToString": "String List to String",
     "WildcardPromptFromString": "Wildcard Prompt from String",

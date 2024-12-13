@@ -19,6 +19,9 @@ class PreviewBridge:
                     "images": ("IMAGE",),
                     "image": ("STRING", {"default": ""}),
                     },
+                "optional": {
+                    "block": ("BOOLEAN", {"default": False, "label_on": "if_empty_mask", "label_off": "never", "tooltip": "is_empty_mask: If the mask is empty, the execution is stopped.\nnever: The execution is never stopped."})
+                    },
                 "hidden": {"unique_id": "UNIQUE_ID", "extra_pnginfo": "EXTRA_PNGINFO"},
                 }
 
@@ -29,6 +32,8 @@ class PreviewBridge:
     OUTPUT_NODE = True
 
     CATEGORY = "ImpactPack/Util"
+
+    DESCRIPTION = "This is a feature that allows you to edit and send a Mask over a image.\nIf the block is set to 'is_empty_mask', the execution is stopped when the mask is empty."
 
     def __init__(self):
         super().__init__()
@@ -70,7 +75,7 @@ class PreviewBridge:
 
         return image, mask.unsqueeze(0), ui_item
 
-    def doit(self, images, image, unique_id, prompt=None, extra_pnginfo=None):
+    def doit(self, images, image, unique_id, block=False, prompt=None, extra_pnginfo=None):
         need_refresh = False
 
         if unique_id not in core.preview_bridge_cache:
@@ -96,9 +101,20 @@ class PreviewBridge:
 
             image = image2
 
+        is_empty_mask = torch.all(mask == 0)
+
+        if block and is_empty_mask and core.is_execution_model_version_supported:
+            from comfy_execution.graph import ExecutionBlocker
+            result = ExecutionBlocker(None), ExecutionBlocker(None)
+        elif block and is_empty_mask:
+            print(f"[Impact Pack] PreviewBridge: ComfyUI is outdated - blocking feature is disabled.")
+            result = pixels, mask
+        else:
+            result = pixels, mask
+
         return {
             "ui": {"images": image},
-            "result": (pixels, mask, ),
+            "result": result,
         }
 
 
@@ -119,6 +135,8 @@ def decode_latent(latent, preview_method, vae_opt=None):
             decoder_name = "taesdxl"
         elif preview_method == 'TAESD3':
             decoder_name = "taesd3"
+        elif preview_method == 'TAEF1':
+            decoder_name = "taef1"
 
         if decoder_name:
             vae = nodes.VAELoader().load_vae(decoder_name)[0]
@@ -170,14 +188,15 @@ class PreviewBridgeLatent:
         return {"required": {
                     "latent": ("LATENT",),
                     "image": ("STRING", {"default": ""}),
-                    "preview_method": (["Latent2RGB-SD3", "Latent2RGB-SDXL", "Latent2RGB-SD15",
+                    "preview_method": (["Latent2RGB-FLUX.1",
+                                        "Latent2RGB-SDXL", "Latent2RGB-SD15", "Latent2RGB-SD3",
                                         "Latent2RGB-SD-X4", "Latent2RGB-Playground-2.5",
                                         "Latent2RGB-SC-Prior", "Latent2RGB-SC-B",
-                                        "Latent2RGB-FLUX.1",
-                                        "TAESD3", "TAESDXL", "TAESD15"],),
+                                        "TAEF1", "TAESDXL", "TAESD15", "TAESD3"],),
                     },
                 "optional": {
-                    "vae_opt": ("VAE", )
+                    "vae_opt": ("VAE", ),
+                    "block": ("BOOLEAN", {"default": False, "label_on": "if_empty_mask", "label_off": "never", "tooltip": "is_empty_mask: If the mask is empty, the execution is stopped.\nnever: The execution is never stopped. Instead, it returns a white mask."})
                 },
                 "hidden": {"unique_id": "UNIQUE_ID", "prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
                 }
@@ -189,6 +208,8 @@ class PreviewBridgeLatent:
     OUTPUT_NODE = True
 
     CATEGORY = "ImpactPack/Util"
+
+    DESCRIPTION = "This is a feature that allows you to edit and send a Mask over a latent image.\nIf the block is set to 'is_empty_mask', the execution is stopped when the mask is empty."
 
     def __init__(self):
         super().__init__()
@@ -231,9 +252,9 @@ class PreviewBridgeLatent:
 
         return image, mask, ui_item
 
-    def doit(self, latent, image, preview_method, vae_opt=None, unique_id=None, prompt=None, extra_pnginfo=None):
+    def doit(self, latent, image, preview_method, vae_opt=None, block=False, unique_id=None, prompt=None, extra_pnginfo=None):
         latent_channels = latent['samples'].shape[1]
-        preview_method_channels = 16 if 'SD3' in preview_method or 'SC-Prior' in preview_method or 'FLUX.1' in preview_method else 4
+        preview_method_channels = 16 if 'SD3' in preview_method or 'SC-Prior' in preview_method or 'FLUX.1' in preview_method or 'TAEF1' == preview_method else 4
 
         if vae_opt is None and latent_channels != preview_method_channels:
             print(f"[PreviewBridgeLatent] The version of latent is not compatible with preview_method.\nSD3, SD1/SD2, SDXL, SC-Prior, SC-B and FLUX.1 are not compatible with each other.")
@@ -260,9 +281,13 @@ class PreviewBridgeLatent:
                     del res_latent['noise_mask']
                 else:
                     res_latent = latent
+
+                is_empty_mask = True
             else:
                 res_latent = latent.copy()
                 res_latent['noise_mask'] = mask
+
+                is_empty_mask = torch.all(mask == 1)
 
             res_image = [path_item]
         else:
@@ -285,10 +310,14 @@ class PreviewBridgeLatent:
                                 'subfolder': 'PreviewBridge',
                                 'type': 'temp',
                             }]
+
+                is_empty_mask = torch.all(mask == 1)
             else:
                 mask = torch.ones(latent['samples'].shape[2:], dtype=torch.float32, device="cpu").unsqueeze(0)
                 res = nodes.PreviewImage().save_images(decoded_image, filename_prefix="PreviewBridge/PBL-", prompt=prompt, extra_pnginfo=extra_pnginfo)
                 res_image = res['ui']['images']
+
+                is_empty_mask = True
 
             path = os.path.join(folder_paths.get_temp_directory(), 'PreviewBridge', res_image[0]['filename'])
             core.set_previewbridge_image(unique_id, path, res_image[0])
@@ -298,7 +327,16 @@ class PreviewBridgeLatent:
 
             res_latent = latent
 
+        if block and is_empty_mask and core.is_execution_model_version_supported:
+            from comfy_execution.graph import ExecutionBlocker
+            result = ExecutionBlocker(None), ExecutionBlocker(None)
+        elif block and is_empty_mask:
+            print(f"[Impact Pack] PreviewBridgeLatent: ComfyUI is outdated - blocking feature is disabled.")
+            result = res_latent, mask
+        else:
+            result = res_latent, mask
+
         return {
             "ui": {"images": res_image},
-            "result": (res_latent, mask, ),
+            "result": result,
         }

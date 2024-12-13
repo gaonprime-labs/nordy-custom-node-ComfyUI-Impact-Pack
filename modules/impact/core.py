@@ -24,6 +24,8 @@ from comfy import model_management
 from impact import utils
 from impact import impact_sampling
 from concurrent.futures import ThreadPoolExecutor
+import inspect
+
 
 try:
     from comfy_extras import nodes_differential_diffusion
@@ -43,6 +45,14 @@ preview_bridge_cache = {}
 current_prompt = None
 
 SCHEDULERS = comfy.samplers.KSampler.SCHEDULERS + ['AYS SDXL', 'AYS SD1', 'AYS SVD', 'GITS[coeff=1.2]']
+
+
+def is_execution_model_version_supported():
+    try:
+        import comfy_execution
+        return True
+    except:
+        return False
 
 
 def set_previewbridge_image(node_id, file, item):
@@ -229,7 +239,7 @@ def enhance_detail(image, model, clip, vae, guide_size, guide_size_for_bbox, max
         noise_mask = utils.tensor_gaussian_blur_mask(noise_mask, noise_mask_feather)
         noise_mask = noise_mask.squeeze(3)
 
-        if noise_mask_feather > 0:
+        if noise_mask_feather > 0 and 'denoise_mask_function' not in model.model_options:
             model = nodes_differential_diffusion.DifferentialDiffusion().apply(model)[0]
 
     if wildcard_opt is not None and wildcard_opt != "":
@@ -375,7 +385,7 @@ def enhance_detail_for_animatediff(image_frames, model, clip, vae, guide_size, g
         noise_mask = utils.tensor_gaussian_blur_mask(noise_mask, noise_mask_feather)
         noise_mask = noise_mask.squeeze(3)
 
-    if noise_mask_feather > 0:
+    if noise_mask_feather > 0 and 'denoise_mask_function' not in model.model_options:
         model = nodes_differential_diffusion.DifferentialDiffusion().apply(model)[0]
 
     if wildcard_opt is not None and wildcard_opt != "":
@@ -1672,6 +1682,9 @@ class PixelKSampleUpscaler:
                 self.hook.pre_ksample(model, seed, steps, cfg, sampler_name, scheduler, positive, negative,
                                       upscaled_latent, denoise)
 
+        if 'noise_mask' in samples:
+            upscaled_latent['noise_mask'] = samples['noise_mask']
+
         refined_latent = self.sample(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, upscaled_latent, denoise, upscaled_images)
         return refined_latent
 
@@ -1700,6 +1713,9 @@ class PixelKSampleUpscaler:
             model, seed, steps, cfg, sampler_name, scheduler, positive, negative, upscaled_latent, denoise = \
                 self.hook.pre_ksample(model, seed, steps, cfg, sampler_name, scheduler, positive, negative,
                                       upscaled_latent, denoise)
+
+        if 'noise_mask' in samples:
+            upscaled_latent['noise_mask'] = samples['noise_mask']
 
         refined_latent = self.sample(model, seed, steps, cfg, sampler_name, scheduler, positive, negative, upscaled_latent, denoise, upscaled_images)
         return refined_latent
@@ -1813,13 +1829,14 @@ class ControlNetWrapper:
 
 class ControlNetAdvancedWrapper:
     def __init__(self, control_net, strength, start_percent, end_percent, preprocessor, prev_control_net=None,
-                 original_size=None, crop_region=None, control_image=None):
+                 original_size=None, crop_region=None, control_image=None, vae=None):
         self.control_net = control_net
         self.strength = strength
         self.preprocessor = preprocessor
         self.prev_control_net = prev_control_net
         self.start_percent = start_percent
         self.end_percent = end_percent
+        self.vae = vae
 
         if original_size is not None and crop_region is not None and control_image is not None:
             self.control_image = utils.tensor_resize(control_image, original_size[1], original_size[0])
@@ -1861,7 +1878,17 @@ class ControlNetAdvancedWrapper:
                 #노르디의 ComfyUI를 멋대로 제부팅하여 커스텀 노드를 CPU단에 설치하는 문제가 있어서 해당 부분 주석 처리 -원경(241008)
                 raise Exception("'ACN_AdvancedControlNetApply' node isn't installed.")
         else:
-            positive, negative = nodes.ControlNetApplyAdvanced().apply_controlnet(positive, negative, self.control_net, cnet_image, self.strength, self.start_percent, self.end_percent)
+            if self.vae is not None:
+                apply_controlnet = nodes.ControlNetApplyAdvanced().apply_controlnet
+                signature = inspect.signature(apply_controlnet)
+
+                if 'vae' in signature.parameters:
+                    positive, negative = nodes.ControlNetApplyAdvanced().apply_controlnet(positive, negative, self.control_net, cnet_image, self.strength, self.start_percent, self.end_percent, vae=self.vae)
+                else:
+                    print(f"[Impact Pack] ERROR: The ComfyUI version is outdated. VAE cannot be used in ApplyControlNet.")
+                    raise Exception("[Impact Pack] ERROR: The ComfyUI version is outdated. VAE cannot be used in ApplyControlNet.")
+            else:
+                positive, negative = nodes.ControlNetApplyAdvanced().apply_controlnet(positive, negative, self.control_net, cnet_image, self.strength, self.start_percent, self.end_percent)
 
         return positive, negative, cnet_image_list
 

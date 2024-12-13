@@ -14,6 +14,13 @@ from comfy.cli_args import args
 import math
 
 
+try:
+    from comfy_extras import nodes_differential_diffusion
+except Exception:
+    print(f"\n#############################################\n[Impact Pack] ComfyUI is an outdated version.\n#############################################\n")
+    raise Exception("[Impact Pack] ComfyUI is an outdated version.")
+
+
 class SEGSDetailer:
     @classmethod
     def INPUT_TYPES(s):
@@ -68,6 +75,9 @@ class SEGSDetailer:
 
         new_segs = []
         cnet_pil_list = []
+
+        if noise_mask_feather > 0 and 'denoise_mask_function' not in model.model_options:
+            model = nodes_differential_diffusion.DifferentialDiffusion().apply(model)[0]
 
         for i in range(batch_size):
             seed += 1
@@ -694,6 +704,68 @@ class SEGSToMaskBatch:
         return (mask_batch,)
 
 
+class SEGSMerge:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                     "segs": ("SEGS", ),
+                     },
+                }
+
+    RETURN_TYPES = ("SEGS",)
+    FUNCTION = "doit"
+
+    CATEGORY = "ImpactPack/Util"
+
+    DESCRIPTION = "SEGS contains multiple SEGs. SEGS Merge integrates several SEGs into a single merged SEG. The label is changed to `merged` and the confidence becomes the minimum confidence. The applied controlnet and cropped_image are removed."
+
+    def doit(self, segs):
+        crop_left = sys.maxsize
+        crop_right = 0
+        crop_top = sys.maxsize
+        crop_bottom = 0
+
+        bbox_left = sys.maxsize
+        bbox_right = 0
+        bbox_top = sys.maxsize
+        bbox_bottom = 0
+
+        min_confidence = 1.0
+
+        for seg in segs[1]:
+            cx1 = seg.crop_region[0]
+            cy1 = seg.crop_region[1]
+            cx2 = seg.crop_region[2]
+            cy2 = seg.crop_region[3]
+
+            bx1 = seg.bbox[0]
+            by1 = seg.bbox[1]
+            bx2 = seg.bbox[2]
+            by2 = seg.bbox[3]
+
+            crop_left = min(crop_left, cx1)
+            crop_top = min(crop_top, cy1)
+            crop_right = max(crop_right, cx2)
+            crop_bottom = max(crop_bottom, cy2)
+
+            bbox_left = min(bbox_left, bx1)
+            bbox_top = min(bbox_top, by1)
+            bbox_right = max(bbox_right, bx2)
+            bbox_bottom = max(bbox_bottom, by2)
+
+            min_confidence = min(min_confidence, seg.confidence)
+        
+        combined_mask = core.segs_to_combined_mask(segs)
+        cropped_mask = combined_mask[crop_top:crop_bottom, crop_left:crop_right]
+        cropped_mask = cropped_mask.unsqueeze(0)
+
+        crop_region = [crop_left, crop_top, crop_right, crop_bottom]
+        bbox = [bbox_left, bbox_top, bbox_right, bbox_bottom]
+
+        seg = SEG(None, cropped_mask, min_confidence, crop_region, bbox, 'merged', None)
+        return ((segs[0], [seg]),)
+        
+
 class SEGSConcat:
     @classmethod
     def INPUT_TYPES(s):
@@ -1290,6 +1362,8 @@ class ControlNetApplySEGS:
     RETURN_TYPES = ("SEGS",)
     FUNCTION = "doit"
 
+    DEPRECATED = True
+
     CATEGORY = "ImpactPack/Util"
 
     @staticmethod
@@ -1317,7 +1391,8 @@ class ControlNetApplyAdvancedSEGS:
                     },
                 "optional": {
                     "segs_preprocessor": ("SEGS_PREPROCESSOR",),
-                    "control_image": ("IMAGE",)
+                    "control_image": ("IMAGE",),
+                    "vae": ("VAE",)
                     }
                 }
 
@@ -1327,13 +1402,13 @@ class ControlNetApplyAdvancedSEGS:
     CATEGORY = "ImpactPack/Util"
 
     @staticmethod
-    def doit(segs, control_net, strength, start_percent, end_percent, segs_preprocessor=None, control_image=None):
+    def doit(segs, control_net, strength, start_percent, end_percent, segs_preprocessor=None, control_image=None, vae=None):
         new_segs = []
 
         for seg in segs[1]:
             control_net_wrapper = core.ControlNetAdvancedWrapper(control_net, strength, start_percent, end_percent, segs_preprocessor,
                                                                  seg.control_net_wrapper, original_size=segs[0], crop_region=seg.crop_region,
-                                                                 control_image=control_image)
+                                                                 control_image=control_image, vae=vae)
             new_seg = SEG(seg.cropped_image, seg.cropped_mask, seg.confidence, seg.crop_region, seg.bbox, seg.label, control_net_wrapper)
             new_segs.append(new_seg)
 
@@ -1402,8 +1477,6 @@ class SEGSPicker:
                 }
 
     RETURN_TYPES = ("SEGS", )
-
-    OUTPUT_NODE = True
 
     FUNCTION = "doit"
 
