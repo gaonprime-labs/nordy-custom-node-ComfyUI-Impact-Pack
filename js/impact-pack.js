@@ -353,7 +353,7 @@ app.registerExtension({
 						}
 
 						this.outputs[0].type = origin_type;
-						this.outputs[0].name = origin_type;
+						this.outputs[0].name = 'output1';
 					}
 
 					return;
@@ -483,8 +483,12 @@ app.registerExtension({
 
 					if(this.inputs[0].type == '*'){
 						const node = app.graph.getNodeById(link_info.origin_id);
-						let origin_type = node.outputs[link_info.origin_slot].type;
-
+						let origin_type = node.outputs[link_info.origin_slot]?.type;
+						if(link_info.target_slot == 0 && this.inputs.length > 1) {
+								origin_type = this.inputs[1].type;
+								node.connect(link_info.origin_slot, node.id, 'input1');
+						}
+						
 						if(origin_type == '*') {
 							this.disconnectInput(link_info.target_slot);
 							return;
@@ -583,17 +587,17 @@ app.registerExtension({
 		}
 
 		if(node.comfyClass == "ImpactSEGSLabelFilter" || node.comfyClass == "SEGSLabelFilterDetailerHookProvider") {
+			node.widgets[0].callback = (value, canvas, node, pos, e) => {
+				if(node.widgets[1].value.trim() != "" && !node.widgets[1].value.trim().endsWith(","))
+					node.widgets[1].value += ", "
+
+				node.widgets[1].value += value;
+				if(node.widgets_values)
+					node.widgets_values[1] = node.widgets[1].value;
+			}
+
 			Object.defineProperty(node.widgets[0], "value", {
 				set: (value) => {
-						const stackTrace = new Error().stack;
-						if(stackTrace.includes('inner_value_change')) {
-							if(node.widgets[1].value.trim() != "" && !node.widgets[1].value.trim().endsWith(","))
-								node.widgets[1].value += ", "
-
-							node.widgets[1].value += value;
-							node.widgets_values[1] = node.widgets[1].value;
-						}
-
 						node._value = value;
 					},
 				get: () => {
@@ -663,18 +667,18 @@ app.registerExtension({
 					break;
 			}
 
+            node.widgets[combo_id+1].callback = (value, canvas, node, pos, e) => {
+                    if(node.widgets[tbox_id].value != '')
+                        node.widgets[tbox_id].value += ', '
+
+                    node.widgets[tbox_id].value += node._wildcard_value;
+            }
+
 			Object.defineProperty(node.widgets[combo_id+1], "value", {
 				set: (value) => {
-						const stackTrace = new Error().stack;
-						if(stackTrace.includes('inner_value_change')) {
-							if(value != "Select the Wildcard to add to the text") {
-								if(node.widgets[tbox_id].value != '')
-									node.widgets[tbox_id].value += ', '
-
-								node.widgets[tbox_id].value += value;
-							}
-						}
-					},
+                    if (value !== "Select the Wildcard to add to the text")
+                        node._wildcard_value = value;
+                },
 				get: () => { return "Select the Wildcard to add to the text"; }
 			});
 
@@ -686,24 +690,22 @@ app.registerExtension({
 			});
 
 			if(has_lora) {
+				node.widgets[combo_id].callback = (value, canvas, node, pos, e) => {
+					let lora_name = node._value;
+					if(lora_name.endsWith('.safetensors')) {
+						lora_name = lora_name.slice(0, -12);
+					}
+
+					node.widgets[tbox_id].value += `<lora:${lora_name}>`;
+					if(node.widgets_values) {
+						node.widgets_values[tbox_id] = node.widgets[tbox_id].value;
+					}
+				}
+
 				Object.defineProperty(node.widgets[combo_id], "value", {
 					set: (value) => {
-							const stackTrace = new Error().stack;
-							if(stackTrace.includes('inner_value_change')) {
-								if(value != "Select the LoRA to add to the text") {
-									let lora_name = value;
-									if (lora_name.endsWith('.safetensors')) {
-										lora_name = lora_name.slice(0, -12);
-									}
-
-									node.widgets[tbox_id].value += `<lora:${lora_name}>`;
-									if(node.widgets_values) {
-										node.widgets_values[tbox_id] = node.widgets[tbox_id].value;
-									}
-								}
-							}
-
-							node._value = value;
+							if (value !== "Select the LoRA to add to the text")
+								node._value = value;
 						},
 
 					get: () => { return "Select the LoRA to add to the text"; }
