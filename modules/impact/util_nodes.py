@@ -446,6 +446,31 @@ class MakeMaskList:
         return (masks, )
 
 
+class NthItemOfAnyList:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required":  {
+                    "any_list": (any_typ,),
+                    "index": ("INT", {"default": 0, "min": 0, "max": sys.maxsize, "step": 1, "tooltip": "The index of the item you want to select from the list."}),
+                    }
+        }
+
+    RETURN_TYPES = (any_typ,)
+    INPUT_IS_LIST = True
+    FUNCTION = "doit"
+
+    CATEGORY = "ImpactPack/Util"
+
+    DESCRIPTION = "Selects the Nth item from a list. If the index is out of range, it returns the last item in the list."
+
+    def doit(self, any_list, index):
+        i = index[0]
+        if i >= len(any_list):
+            return (any_list[-1],)
+        else:
+            return (any_list[i],)
+
+
 class MakeImageList:
     @classmethod
     def INPUT_TYPES(s):
@@ -526,6 +551,9 @@ class ReencodeLatent:
                         "output_vae": ("VAE", ),
                         "tile_size": ("INT", {"default": 512, "min": 320, "max": 4096, "step": 64}),
                     },
+                "optional": {
+                    "overlap": ("INT", {"default": 64, "min": 0, "max": 4096, "step": 32, "tooltip": "This setting applies when 'tile_mode' is enabled."}),
+                    }
                 }
 
     CATEGORY = "ImpactPack/Util"
@@ -533,14 +561,22 @@ class ReencodeLatent:
     RETURN_TYPES = ("LATENT", )
     FUNCTION = "doit"
 
-    def doit(self, samples, tile_mode, input_vae, output_vae, tile_size=512):
+    def doit(self, samples, tile_mode, input_vae, output_vae, tile_size=512, overlap=64):
         if tile_mode in ["Both", "Decode(input) only"]:
-            pixels = nodes.VAEDecodeTiled().decode(input_vae, samples, tile_size)[0]
+            decoder = nodes.VAEDecodeTiled()
+            if 'overlap' in inspect.signature(decoder.decode).parameters:
+                pixels = decoder.decode(input_vae, samples, tile_size, overlap=overlap)[0]
+            else:
+                pixels = decoder.decode(input_vae, samples, tile_size, overlap=overlap)[0]
         else:
             pixels = nodes.VAEDecode().decode(input_vae, samples)[0]
 
         if tile_mode in ["Both", "Encode(output) only"]:
-            return nodes.VAEEncodeTiled().encode(output_vae, pixels, tile_size)
+            encoder = nodes.VAEEncodeTiled()
+            if 'overlap' in inspect.signature(encoder.encode).parameters:
+                return encoder.encode(output_vae, pixels, tile_size, overlap=overlap)
+            else:
+                return encoder.encode(output_vae, pixels, tile_size)
         else:
             return nodes.VAEEncode().encode(output_vae, pixels)
 

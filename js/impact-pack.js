@@ -1,6 +1,13 @@
 import { ComfyApp, app } from "../../scripts/app.js";
 import { ComfyDialog, $el } from "../../scripts/ui.js";
 import { api } from "../../scripts/api.js";
+import { customAlert, isBeforeFrontendVersion } from "./common.js";
+
+const is_legacy_front = () => isBeforeFrontendVersion('1.16.9');
+
+if(is_legacy_front()) {
+	customAlert("An outdated version(<1.16.9) of the `comfyui-frontend-package` is installed. It is not compatible with the current version of the Impact Pack.");
+}
 
 let wildcards_list = [];
 async function load_wildcards() {
@@ -93,7 +100,7 @@ const input_dirty = {};
 const output_tracking = {};
 
 function progressExecuteHandler(event) {
-	if(event.detail.output.aux){
+	if(event.detail?.output?.aux){
 		const id = event.detail.node;
 		if(input_tracking.hasOwnProperty(id)) {
 			if(input_tracking.hasOwnProperty(id) && input_tracking[id][0] != event.detail.output.aux[0]) {
@@ -222,6 +229,31 @@ api.addEventListener("executed", progressExecuteHandler);
 
 app.registerExtension({
 	name: "Comfy.Impack",
+
+	commands: [
+		{
+			id: 'refresh-impact-wildcard',
+			label: 'Impact: Refresh Wildcard',
+			function: async () => {
+				await api.fetchApi('/impact/wildcards/refresh');
+				await load_wildcards();
+				app.extensionManager.toast.add({
+					severity: 'info',
+					summary: 'Refreshed!',
+					detail: 'Impact Wildcard List is refreshed!!',
+					life: 3000
+				});
+			}
+		}
+	],
+
+	menuCommands: [
+		{
+			path: ['Edit'],
+			commands: ['refresh-impact-wildcard']
+		}
+	],
+
 	loadedGraphNode(node, app) {
 		if (node.comfyClass == "MaskPainter") {
 			input_dirty[node.id + ""] = true;
@@ -248,7 +280,7 @@ app.registerExtension({
 				}
 				else {
 					const node = app.graph.getNodeById(link_info.origin_id);
-					slot_type = node.outputs[link_info.origin_slot].type;
+					slot_type = node.outputs[link_info.origin_slot]?.type;
 				}
 
 				this.inputs[0].type = slot_type;
@@ -299,6 +331,32 @@ app.registerExtension({
 			}
 		}
 
+		if(nodeData.name == "ImpactSelectNthItemOfAnyList") {
+			const onConnectionsChange = nodeType.prototype.onConnectionsChange;
+			nodeType.prototype.onConnectionsChange = function (type, index, connected, link_info) {
+				if(!link_info || this.inputs[0].type != '*')
+					return;
+
+				if(index >= 2)
+					return;
+
+				// assign type
+				let slot_type = '*';
+
+				if(type == 2) {
+					slot_type = link_info.type;
+				}
+				else {
+					const node = app.graph.getNodeById(link_info.origin_id);
+					slot_type = node.outputs[link_info.origin_slot].type;
+				}
+
+				this.inputs[0].type = slot_type;
+				this.outputs[0].type = slot_type;
+				this.outputs[0].label = slot_type;
+			}
+		}
+
 		if(nodeData.name === 'ImpactInversedSwitch') {
 			nodeData.output = ['*'];
 			nodeData.output_is_list = [false];
@@ -312,12 +370,12 @@ app.registerExtension({
 				if(type == 2) {
 					// connect output
 					if(connected){
-						if(app.graph._nodes_by_id[link_info.target_id].type == 'Reroute') {
+						if(app.graph._nodes_by_id[link_info.target_id]?.type == 'Reroute') {
 							app.graph._nodes_by_id[link_info.target_id].disconnectInput(link_info.target_slot);
 						}
 
 						if(this.outputs[0].type == '*'){
-							if(link_info.type == '*') {
+							if(link_info.type == '*' && app.graph.getNodeById(link_info.target_id).slots[link_info.target_slot].type != '*') {
 								app.graph._nodes_by_id[link_info.target_id].disconnectInput(link_info.target_slot);
 							}
 							else {
@@ -334,15 +392,19 @@ app.registerExtension({
 					}
 				}
 				else {
-					if(app.graph._nodes_by_id[link_info.origin_id].type == 'Reroute')
+					if(app.graph._nodes_by_id[link_info.origin_id]?.type == 'Reroute')
 						this.disconnectInput(link_info.target_slot);
 
 					// connect input
 					if(this.inputs[0].type == '*'){
 						const node = app.graph.getNodeById(link_info.origin_id);
-						let origin_type = node.outputs[link_info.origin_slot].type;
+						let origin_type = node.outputs[link_info.origin_slot]?.type;
 
-						if(origin_type == '*') {
+						if(origin_type==undefined) {
+							return; // fallback
+						}
+
+						if(origin_type == '*' && app.graph.getNodeById(link_info.origin_id).slots[link_info.origin_slot].type != '*') {
 							this.disconnectInput(link_info.target_slot);
 							return;
 						}
@@ -366,20 +428,27 @@ app.registerExtension({
 						!stackTrace.includes('LGraphNode.prototype.connect') && // for touch device
 						!stackTrace.includes('LGraphNode.connect') && // for mouse device
 						!stackTrace.includes('loadGraphData')) {
-							if(this.outputs[link_info.origin_slot].links.length == 0)
+							if(this.outputs[link_info.origin_slot].links.length == 0) {
 								this.removeOutput(link_info.origin_slot);
+							}
 					}
 				}
 
 				let slot_i = 1;
 				for (let i = 0; i < this.outputs.length; i++) {
 					this.outputs[i].name = `output${slot_i}`
+					if (this.outputs[i].slot_index === undefined) {
+						this.outputs[i].slot_index = i;
+					}
 					slot_i++;
 				}
 
-				let last_slot = this.outputs[this.outputs.length - 1];
-				if (last_slot.slot_index == link_info.origin_slot) {
-					this.addOutput(`output${slot_i}`, this.outputs[0].type);
+				if(connected) {
+					// NOTE: node.slot_index is different with link_info.origin_slot
+					let last_slot_index = this.outputs.length - 1;
+					if (last_slot_index == link_info.origin_slot) {
+						this.addOutput(`output${slot_i}`, this.outputs[0].type);
+					}
 				}
 
 				let select_slot = this.inputs.find(x => x.name == "select");
@@ -442,6 +511,23 @@ app.registerExtension({
 
 			const onConnectionsChange = nodeType.prototype.onConnectionsChange;
 			nodeType.prototype.onConnectionsChange = function (type, index, connected, link_info) {
+				const stackTrace = new Error().stack;
+				if(stackTrace.includes('loadGraphData')) {
+					if(this.widgets?.[0]) {
+						this.widgets[0].options.max = this.inputs.length-3;
+						this.widgets[0].value = Math.min(this.widgets[0].value, this.widgets[0].options.max);
+					}
+					return;
+				}
+
+				if(stackTrace.includes('pasteFromClipboard')) {
+					if(this.widgets?.[0]) {
+						this.widgets[0].options.max = this.inputs.length-3;
+						this.widgets[0].value = Math.min(this.widgets[0].value, this.widgets[0].options.max);
+					}
+					return;
+				}
+
 				if(!link_info)
 					return;
 
@@ -453,7 +539,7 @@ app.registerExtension({
 						}
 
 						if(this.outputs[0].type == '*'){
-							if(link_info.type == '*') {
+							if(link_info.type == '*' && app.graph.getNodeById(link_info.target_id).slots[link_info.target_slot].type != '*') {
 								app.graph._nodes_by_id[link_info.target_id].disconnectInput(link_info.target_slot);
 							}
 							else {
@@ -484,12 +570,12 @@ app.registerExtension({
 					if(this.inputs[0].type == '*'){
 						const node = app.graph.getNodeById(link_info.origin_id);
 						let origin_type = node.outputs[link_info.origin_slot]?.type;
-						if(link_info.target_slot == 0 && this.inputs.length > 1) {
+						if(link_info.target_slot == 0 && this.inputs.length > 3) {  // NOTE: widgets are regarded as input since new front
 								origin_type = this.inputs[1].type;
 								node.connect(link_info.origin_slot, node.id, 'input1');
 						}
 						
-						if(origin_type == '*') {
+						if(origin_type == '*' && app.graph.getNodeById(link_info.origin_id).slots[link_info.origin_slot].type != '*') {
 							this.disconnectInput(link_info.target_slot);
 							return;
 						}
@@ -507,15 +593,8 @@ app.registerExtension({
 				}
 
 				let select_slot = this.inputs.find(x => x.name == "select");
-				let mode_slot = this.inputs.find(x => x.name == "sel_mode");
 
-				let converted_count = 0;
-				converted_count += select_slot?1:0;
-				converted_count += mode_slot?1:0;
-
-				if (!connected && (this.inputs.length > 1+converted_count)) {
-					const stackTrace = new Error().stack;
-
+				if (!connected && (this.inputs.length > 3)) {
 					if(
 						!stackTrace.includes('LGraphNode.prototype.connect') && // for touch device
 						!stackTrace.includes('LGraphNode.connect') && // for mouse device
@@ -524,6 +603,7 @@ app.registerExtension({
 						    this.removeInput(index);
 					}
 				}
+
 
 				let slot_i = 1;
 				for (let i = 0; i < this.inputs.length; i++) {
@@ -534,18 +614,13 @@ app.registerExtension({
 					}
 				}
 
-				let last_slot = this.inputs[this.inputs.length - 1];
-				if (
-					(last_slot.name == 'select' && last_slot.name != 'sel_mode' && this.inputs[this.inputs.length - 2].link != undefined)
-					|| (last_slot.name != 'select' && last_slot.name != 'sel_mode' && last_slot.link != undefined)) {
-						this.addInput(`${input_name}${slot_i}`, this.outputs[0].type);
+				if(connected) {
+					this.addInput(`${input_name}${slot_i}`, this.outputs[0].type);
 				}
 
-				if(this.widgets?.length) {
-					this.widgets[0].options.max = select_slot?this.inputs.length-1:this.inputs.length;
+				if(this.widgets?.[0]) {
+					this.widgets[0].options.max = this.inputs.length-3;
 					this.widgets[0].value = Math.min(this.widgets[0].value, this.widgets[0].options.max);
-					if(this.widgets[0].options.max > 0 && this.widgets[0].value == 0)
-						this.widgets[0].value = 1;
 				}
 			}
 		}
@@ -588,12 +663,14 @@ app.registerExtension({
 
 		if(node.comfyClass == "ImpactSEGSLabelFilter" || node.comfyClass == "SEGSLabelFilterDetailerHookProvider") {
 			node.widgets[0].callback = (value, canvas, node, pos, e) => {
-				if(node.widgets[1].value.trim() != "" && !node.widgets[1].value.trim().endsWith(","))
-					node.widgets[1].value += ", "
+				if(node) {
+					if(node.widgets[1].value.trim() != "" && !node.widgets[1].value.trim().endsWith(","))
+						node.widgets[1].value += ", "
 
-				node.widgets[1].value += value;
-				if(node.widgets_values)
-					node.widgets_values[1] = node.widgets[1].value;
+					node.widgets[1].value += value;
+					if(node.widgets_values)
+						node.widgets_values[1] = node.widgets[1].value;
+				}
 			}
 
 			Object.defineProperty(node.widgets[0], "value", {
@@ -667,18 +744,20 @@ app.registerExtension({
 					break;
 			}
 
-            node.widgets[combo_id+1].callback = (value, canvas, node, pos, e) => {
-                    if(node.widgets[tbox_id].value != '')
-                        node.widgets[tbox_id].value += ', '
+			node.widgets[combo_id+1].callback = (value, canvas, node, pos, e) => {
+					if(node) {
+						if(node.widgets[tbox_id].value != '')
+							node.widgets[tbox_id].value += ', '
 
-                    node.widgets[tbox_id].value += node._wildcard_value;
-            }
+						node.widgets[tbox_id].value += node._wildcard_value;
+					}
+			}
 
 			Object.defineProperty(node.widgets[combo_id+1], "value", {
 				set: (value) => {
-                    if (value !== "Select the Wildcard to add to the text")
-                        node._wildcard_value = value;
-                },
+					if (value !== "Select the Wildcard to add to the text")
+						node._wildcard_value = value;
+				},
 				get: () => { return "Select the Wildcard to add to the text"; }
 			});
 
@@ -691,14 +770,16 @@ app.registerExtension({
 
 			if(has_lora) {
 				node.widgets[combo_id].callback = (value, canvas, node, pos, e) => {
-					let lora_name = node._value;
-					if(lora_name.endsWith('.safetensors')) {
-						lora_name = lora_name.slice(0, -12);
-					}
+					if(node) {
+						let lora_name = node._value;
+						if(lora_name.endsWith('.safetensors')) {
+							lora_name = lora_name.slice(0, -12);
+						}
 
-					node.widgets[tbox_id].value += `<lora:${lora_name}>`;
-					if(node.widgets_values) {
-						node.widgets_values[tbox_id] = node.widgets[tbox_id].value;
+						node.widgets[tbox_id].value += `<lora:${lora_name}>`;
+						if(node.widgets_values) {
+							node.widgets_values[tbox_id] = node.widgets[tbox_id].value;
+						}
 					}
 				}
 
@@ -730,14 +811,20 @@ app.registerExtension({
 			// mode combo
 			Object.defineProperty(mode_widget, "value", {
 				set: (value) => {
-						node._mode_value = value == true || value == "Populate";
-						populated_text_widget.inputEl.disabled = value == true || value == "Populate";
+						if(value == true)
+							node._mode_value = "populate";
+						else if(value == false)
+							node._mode_value = "fixed";
+						else
+							node._mode_value = value; // combo value
+
+						populated_text_widget.inputEl.disabled = node._mode_value == 'populate';
 					},
 				get: () => {
 						if(node._mode_value != undefined)
 							return node._mode_value;
 						else
-							return true;
+							return 'populate';
 					 }
 			});
 		}

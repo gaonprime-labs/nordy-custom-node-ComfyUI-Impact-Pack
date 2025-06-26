@@ -8,6 +8,7 @@ import numpy as np
 import threading
 from impact import utils
 from impact import config
+import logging
 
 
 wildcards_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "wildcards"))
@@ -44,7 +45,9 @@ def read_wildcard(k, v):
     elif isinstance(v, str):
         k = wildcard_normalize(k)
         wildcard_dict[k] = [v]
-
+    elif isinstance(v, (int, float)):
+        k = wildcard_normalize(k)
+        wildcard_dict[k] = [str(v)]
 
 def read_wildcard_dict(wildcard_path):
     global wildcard_dict
@@ -63,7 +66,7 @@ def read_wildcard_dict(wildcard_path):
                     with open(file_path, 'r', encoding="UTF-8", errors="ignore") as f:
                         lines = f.read().splitlines()
                         wildcard_dict[key] = [x for x in lines if not x.strip().startswith('#')]
-            elif file.endswith('.yaml'):
+            elif file.endswith('.yaml') or file.endswith('.yml'):
                 file_path = os.path.join(root, file)
 
                 try:
@@ -135,6 +138,8 @@ def process(text, seed=None):
                     b = r.group(3)
                     if b is not None:
                         b = b.strip()
+                    else:
+                        b = "-1"
                         
                 if r is not None:
                     if b is not None and is_numeric_string(a) and is_numeric_string(b):
@@ -145,26 +150,32 @@ def process(text, seed=None):
                         x = int(a)
                         select_range = (x, x)
 
+                    # Expand wildcard path or return the string after $$
+                    def expand_wildcard_or_return_string(options, pattern, wildcard_pattern):
+                        matches = re.findall(wildcard_pattern, pattern)
+                        if len(options) == 1 and matches:
+                            # $$<single wildcard>
+                            return get_wildcard_options(pattern)
+                        else:
+                            # $$opt1|opt2|...
+                            options[0] = pattern
+                            return options
+
                     if select_range is not None and len(multi_select_pattern) == 2:
                         # PATTERN: count$$
-                        matches = re.findall(wildcard_pattern, multi_select_pattern[1])
-                        if len(options) == 1 and matches:
-                            # count$$<single wildcard>
-                            options = get_wildcard_options(multi_select_pattern[1])
-                        else:
-                            # count$$opt1|opt2|...
-                            options[0] = multi_select_pattern[1]
+                        options = expand_wildcard_or_return_string(options, multi_select_pattern[1], wildcard_pattern )
                     elif select_range is not None and len(multi_select_pattern) == 3:
                         # PATTERN: count$$ sep $$
                         select_sep = multi_select_pattern[1]
-                        options[0] = multi_select_pattern[2]
+                        options = expand_wildcard_or_return_string(options, multi_select_pattern[2], wildcard_pattern )
 
             adjusted_probabilities = []
 
             total_prob = 0
 
             for option in options:
-                parts = option.split('::', 1)
+                parts = option.split('::', 1) if isinstance(option, str) else f"{option}".split('::', 1)
+
                 if len(parts) == 2 and is_numeric_string(parts[0].strip()):
                     config_value = float(parts[0].strip())
                 else:
@@ -178,15 +189,30 @@ def process(text, seed=None):
             if select_range is None:
                 select_count = 1
             else:
-                select_count = random_gen.integers(low=select_range[0], high=select_range[1]+1, size=1)
+                def calculate_max(_options_length, _max_select_range):
+                    return min(_max_select_range + 1, _options_length + 1) if _max_select_range > 0 else _options_length + 1
 
-            if select_count > len(options):
+                def calculate_select_count(_max_value, _min_select_range, random_gen):
+                    if max(_max_value, _min_select_range) <= 0:
+                        return 0
+                    # fix: low >= high
+                    elif _max_value == _min_select_range:
+                        return _max_value
+                    else:
+                        # fix: low >= high
+                        _low_value = min(_min_select_range, _max_value)
+                        _high_value = max(_min_select_range, _max_value)
+                        return random_gen.integers(low=_low_value, high=_high_value, size=1)
+                select_count = calculate_select_count(calculate_max(len(options), select_range[1]), select_range[0], random_gen)
+
+            if select_count > len(options) or total_prob <= 1:
                 random_gen.shuffle(options)
                 selected_items = options
             else:
                 selected_items = random_gen.choice(options, p=normalized_probabilities, size=select_count, replace=False)
 
-            selected_items2 = [re.sub(r'^\s*[0-9.]+::', '', x, 1) for x in selected_items]
+            # x may be numpy.int32, convert to string
+            selected_items2 = [re.sub(r'^\s*[0-9.]+::', '', str(x), count=1) for x in selected_items]
             replacement = select_sep.join(selected_items2)
             if '::' in replacement:
                 pass
@@ -194,7 +220,7 @@ def process(text, seed=None):
             replacements_found = True
             return replacement
 
-        pattern = r'{([^{}]*?)}'
+        pattern = r'(?<!\\)\{((?:[^{}]|(?<=\\)[{}])*?)(?<!\\)\}'
         replaced_string = re.sub(pattern, replace_option, string)
 
         return replaced_string, replacements_found
@@ -237,7 +263,23 @@ def process(text, seed=None):
             keyword = match.lower()
             keyword = wildcard_normalize(keyword)
             if keyword in local_wildcard_dict:
-                replacement = random_gen.choice(local_wildcard_dict[keyword])
+                # look for adjusted probability
+                adjusted_probabilities = []
+                total_prob = 0
+                options=local_wildcard_dict[keyword]
+                for option in options:
+                    parts = option.split('::', 1)
+                    if len(parts) == 2 and is_numeric_string(parts[0].strip()):
+                        config_value = float(parts[0].strip())
+                    else:
+                        config_value = 1  # Default value if no configuration is provided
+
+                    adjusted_probabilities.append(config_value)
+                    total_prob += config_value
+
+                normalized_probabilities = [prob / total_prob for prob in adjusted_probabilities]
+                selected_item = random_gen.choice(options, p=normalized_probabilities, replace=False)
+                replacement = re.sub(r'^\s*[0-9.]+::', '', selected_item, count=1)
                 replacements_found = True
                 string = string.replace(f"__{match}__", replacement, 1)
             elif '*' in keyword:
@@ -317,6 +359,7 @@ def extract_lora_values(string):
         lbw = None
         lbw_a = None
         lbw_b = None
+        loader = None
 
         if len(item) > 0:
             lora = item[0]
@@ -335,6 +378,8 @@ def extract_lora_values(string):
                             lbw_b = safe_float(lbw_item[2:].strip())
                         elif lbw_item.strip() != '':
                             lbw = lbw_item
+                elif sub_item.startswith("LOADER="):
+                    loader = sub_item[7:]
 
         if a is None:
             a = 1.0
@@ -342,7 +387,7 @@ def extract_lora_values(string):
             b = a
 
         if lora is not None and lora not in added:
-            result.append((lora, a, b, lbw, lbw_a, lbw_b))
+            result.append((lora, a, b, lbw, lbw_a, lbw_b, loader))
             added.add(lora)
 
     return result
@@ -366,6 +411,8 @@ def resolve_lora_name(lora_name_cache, name):
             if x.endswith(name):
                 return x
 
+    return None
+
 
 def process_with_loras(wildcard_opt, model, clip, clip_encoder=None, seed=None, processed=None):
     """
@@ -386,7 +433,7 @@ def process_with_loras(wildcard_opt, model, clip, clip_encoder=None, seed=None, 
     loras = extract_lora_values(pass1)
     pass2 = remove_lora_tags(pass1)
 
-    for lora_name, model_weight, clip_weight, lbw, lbw_a, lbw_b in loras:
+    for lora_name, model_weight, clip_weight, lbw, lbw_a, lbw_b, loader in loras:
         lora_name_ext = lora_name.split('.')
         if ('.'+lora_name_ext[-1]) not in folder_paths.supported_pt_extensions:
             lora_name = lora_name+".safetensors"
@@ -400,10 +447,19 @@ def process_with_loras(wildcard_opt, model, clip, clip_encoder=None, seed=None, 
             path = None
 
         if path is not None:
-            print(f"LOAD LORA: {lora_name}: {model_weight}, {clip_weight}, LBW={lbw}, A={lbw_a}, B={lbw_b}")
+            logging.info(f"LOAD LORA: {lora_name}: {model_weight}, {clip_weight}, LBW={lbw}, A={lbw_a}, B={lbw_b}, LOADER={loader}")
 
-            def default_lora():
-                return nodes.LoraLoader().load_lora(model, clip, lora_name, model_weight, clip_weight)
+            if loader is not None:
+                if loader == 'nunchaku':
+                    if 'NunchakuFluxLoraLoader' not in nodes.NODE_CLASS_MAPPINGS:
+                        logging.warning(f"To use `LOADER=nunchaku`, 'ComfyUI-nunchaku' is required. The LOADER= attribute is being ignored.")
+                    cls = nodes.NODE_CLASS_MAPPINGS['NunchakuFluxLoraLoader']
+                    model = cls().load_lora(model, lora_name, model_weight)[0]
+                else:
+                    logging.warning(f"LORA LOADER NOT FOUND: '{loader}'")
+            else:
+                def default_lora():
+                    return nodes.LoraLoader().load_lora(model, clip, lora_name, model_weight, clip_weight)
 
             if lbw is not None:
                 if 'LoraLoaderBlockWeight //Inspire' not in nodes.NODE_CLASS_MAPPINGS:
@@ -412,15 +468,16 @@ def process_with_loras(wildcard_opt, model, clip, clip_encoder=None, seed=None, 
                     #    "To use 'LBW=' syntax in wildcards, 'Inspire Pack' extension is required.")
                     #노르디의 ComfyUI를 멋대로 제부팅하여 커스텀 노드를 CPU단에 설치하는 문제가 있어서 해당 부분 주석 처리 -원경(241008)
 
-                    print(f"'LBW(Lora Block Weight)' is given, but the 'Inspire Pack' is not installed. The LBW= attribute is being ignored.")
-                    model, clip = default_lora()
+                        logging.warning(f"'LBW(Lora Block Weight)' is given, but the 'Inspire Pack' is not installed. The LBW= attribute is being ignored.")
+                        model, clip = default_lora()
+                    else:
+                        cls = nodes.NODE_CLASS_MAPPINGS['LoraLoaderBlockWeight //Inspire']
+                        model, clip, _ = cls().doit(model, clip, lora_name, model_weight, clip_weight, False, 0, lbw_a, lbw_b, "", lbw)
+
                 else:
-                    cls = nodes.NODE_CLASS_MAPPINGS['LoraLoaderBlockWeight //Inspire']
-                    model, clip, _ = cls().doit(model, clip, lora_name, model_weight, clip_weight, False, 0, lbw_a, lbw_b, "", lbw)
-            else:
-                model, clip = default_lora()
+                    model, clip = default_lora()
         else:
-            print(f"LORA NOT FOUND: {orig_lora_name}")
+            logging.warning(f"LORA NOT FOUND: {orig_lora_name}")
 
     pass3 = [x.strip() for x in pass2.split("BREAK")]
     pass3 = [x for x in pass3 if x != '']
@@ -429,7 +486,7 @@ def process_with_loras(wildcard_opt, model, clip, clip_encoder=None, seed=None, 
         pass3 = ['']
 
     pass3_str = [f'[{x}]' for x in pass3]
-    print(f"CLIP: {str.join(' + ', pass3_str)}")
+    logging.info(f"CLIP: {str.join(' + ', pass3_str)}")
 
     result = None
 

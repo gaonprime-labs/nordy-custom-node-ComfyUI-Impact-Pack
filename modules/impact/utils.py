@@ -7,6 +7,7 @@ import nodes
 from . import config
 from PIL import Image
 import comfy
+import time
 
 
 class TensorBatchBuilder:
@@ -177,31 +178,71 @@ def tensor2numpy(image):
 
 
 def tensor_paste(image1, image2, left_top, mask):
-    """Mask and image2 has to be the same size"""
+    """
+    Pastes image2 onto image1 at position left_top using mask.
+    Supports both RGB and RGBA images.
+    """
     _tensor_check_image(image1)
     _tensor_check_image(image2)
     _tensor_check_mask(mask)
+    
     if image2.shape[1:3] != mask.shape[1:3]:
         mask = resize_mask(mask.squeeze(dim=3), image2.shape[1:3]).unsqueeze(dim=3)
-        # raise ValueError(f"Inconsistent size: Image ({image2.shape[1:3]}) != Mask ({mask.shape[1:3]})")
-
+    
     x, y = left_top
-    _, h1, w1, _ = image1.shape
-    _, h2, w2, _ = image2.shape
-
-    # calculate image patch size
+    _, h1, w1, c1 = image1.shape
+    _, h2, w2, c2 = image2.shape
+    
+    # Calculate image patch size
     w = min(w1, x + w2) - x
     h = min(h1, y + h2) - y
-
+    
     # If the patch is out of bound, nothing to do!
     if w <= 0 or h <= 0:
         return
-
+    
     mask = mask[:, :h, :w, :]
-    image1[:, y:y+h, x:x+w, :] = (
-        (1 - mask) * image1[:, y:y+h, x:x+w, :] +
-        mask * image2[:, :h, :w, :]
-    )
+    
+    # Get the region to be modified
+    region1 = image1[:, y:y+h, x:x+w, :]
+    region2 = image2[:, :h, :w, :]
+    
+    # Handle RGB and RGBA cases
+    if c1 == 3 and c2 == 3:
+        # Both RGB - simple case
+        image1[:, y:y+h, x:x+w, :] = (1 - mask) * region1 + mask * region2
+    
+    elif c1 == 4 and c2 == 4:
+        # Both RGBA - need to handle alpha channel separately
+        # RGB channels
+        image1[:, y:y+h, x:x+w, :3] = (
+            (1 - mask) * region1[:, :, :, :3] +
+            mask * region2[:, :, :, :3]
+        )
+        
+        # Alpha channel - use "over" composition
+        a1 = region1[:, :, :, 3:4]
+        a2 = region2[:, :, :, 3:4] * mask
+        new_alpha = a1 + a2 * (1 - a1)
+        image1[:, y:y+h, x:x+w, 3:4] = new_alpha
+    
+    elif c1 == 4 and c2 == 3:
+        # Target is RGBA, source is RGB - assume source is fully opaque
+        image1[:, y:y+h, x:x+w, :3] = (
+            (1 - mask) * region1[:, :, :, :3] +
+            mask * region2
+        )
+        # Alpha channel - reduce alpha where mask is applied
+        image1[:, y:y+h, x:x+w, 3:4] = region1[:, :, :, 3:4] * (1 - mask) + mask
+    
+    elif c1 == 3 and c2 == 4:
+        # Target is RGB, source is RGBA - apply source alpha to mask
+        effective_mask = mask * region2[:, :, :, 3:4]
+        image1[:, y:y+h, x:x+w, :] = (
+            (1 - effective_mask) * region1 +
+            effective_mask * region2[:, :, :, :3]
+        )
+    
     return
 
 
@@ -501,15 +542,21 @@ def crop_image(image, crop_region):
     return crop_tensor4(image, crop_region)
 
 
-def to_latent_image(pixels, vae):
+def to_latent_image(pixels, vae, vae_tiled_encode=False):
     x = pixels.shape[1]
     y = pixels.shape[2]
     if pixels.shape[1] != x or pixels.shape[2] != y:
         pixels = pixels[:, :x, :y, :]
 
-    vae_encode = nodes.VAEEncode()
+    start = time.time()
+    if vae_tiled_encode:
+        encoded = nodes.VAEEncodeTiled().encode(vae, pixels, 512, overlap=64)[0] # using default settings
+        print(f"[Impact Pack] vae encoded (tiled) in {time.time() - start:.1f}s")
+    else:
+        encoded = nodes.VAEEncode().encode(vae, pixels)[0]
+        print(f"[Impact Pack] vae encoded in {time.time() - start:.1f}s")
 
-    return vae_encode.encode(vae, pixels)[0]
+    return encoded
 
 
 def empty_pil_tensor(w=64, h=64):

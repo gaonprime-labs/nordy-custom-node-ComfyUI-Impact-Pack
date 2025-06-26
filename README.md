@@ -32,6 +32,31 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
 * With the addition of wildcard support in FaceDetailer, the structure of DETAILER_PIPE-related nodes and Detailer nodes has changed. There may be malfunctions when using the existing workflow.
 
 
+## How To Install
+
+### **Recommended**
+* Install via [ComfyUI-Manager](https://github.com/ltdrdata/ComfyUI-Manager).
+
+### **Manual**
+* Navigate to `ComfyUI/custom_nodes` in your terminal (cmd).
+* Clone the repository under the `custom_nodes` directory using the following command:
+  ```
+  git clone https://github.com/ltdrdata/ComfyUI-Impact-Pack comfyui-impact-pack
+  cd comfyui-impact-pack
+  ```
+* Install dependencies in your Python environment.
+    * For Windows Portable, run the following command inside `ComfyUI\custom_nodes\comfyui-impact-pack`:
+        ```
+        ..\..\..\python_embeded\python.exe -m pip install -r requirements.txt
+        ```
+    * If using venv or conda, activate your Python environment first, then run:
+        ```
+        pip install -r requirements.txt
+        ```
+
+### Companion Pack
+* If you need the `Ultralytics Detector Provider` to use various YOLO detection models, you should also install [ComfyUI-Impact-Subpack](https://github.com/ltdrdata/ComfyUI-Impact-Subpack).
+
 ## Custom Nodes
 ### [Detector nodes](https://github.com/ltdrdata/ComfyUI-extension-tutorials/blob/Main/ComfyUI-Impact-Pack/tutorial/detectors.md)
   * `SAMLoader` - Loads the SAM model.
@@ -68,6 +93,8 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
   * `Dilate Mask` - Dilate Mask.
     * Support erosion for negative value.
   * `Gaussian Blur Mask` - Apply Gaussian Blur to Mask. You can utilize this for mask feathering.
+  * `Mask Rect Area` - Create a rectangular mask defined by percentages with preview canvas.
+  * `Mask Rect Area (Advanced)` - Create a rectangular mask defined by pixels and image size. 
 
 ### [Detailer nodes](https://github.com/ltdrdata/ComfyUI-extension-tutorials/blob/Main/ComfyUI-Impact-Pack/tutorial/detailers.md)
   * `Detailer (SEGS)` - Refines the image based on SEGS.
@@ -105,6 +132,8 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
   * `SEGS Filter (label)` - This node filters SEGS based on the label of the detected areas. 
   * `SEGS Filter (ordered)` - This node sorts SEGS based on size and position and retrieves SEGs within a certain range. 
   * `SEGS Filter (range)` - This node retrieves only SEGs from SEGS that have a size and position within a certain range.
+  * `SEGS Filter (non max suppression)` - This node filters SEGS by removing those with high overlap based on the Intersection over Union (IoU) threshold, keeping only the most confident detections.
+  * `SEGS Filter (intersection)` - This node filters segs1, keeping only the SEGS that do not significantly overlap with any SEGS in segs2, based on the Intersection over Area (IoA) threshold.
   * `SEGS Assign (label)` - Assign labels sequentially to SEGS. This node is useful when used with `[LAB]` of FaceDetailer.
   * `SEGSConcat` - Concatenate segs1 and segs2. If source shape of segs1 and segs2 are different from segs2 will be ignored.
   * `SEGS Merge` - SEGS contains multiple SEGs. SEGS Merge integrates several SEGs into a single merged SEG. The label is changed to `merged` and the confidence becomes the minimum confidence. The applied controlnet and cropped_image are removed.
@@ -160,6 +189,10 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
   * `PreviewDetailerHook` - Connecting this hook node helps provide assistance for viewing previews whenever SEGS Detailing tasks are completed. When working with a large number of SEGS, such as Make Tile SEGS, it allows for monitoring the situation as improvements progress incrementally.
     * Since this is the hook applied when pasting onto the original image, it has no effect on nodes like `SEGSDetailer`.
   * `VariationNoiseDetailerHookProvider` - Apply variation seed to the detailer. It can be applied in multiple stages through combine.
+  * `CustomSamplerDetailerHookProvider` - Apply a hook that allows you to use a custom sampler in the Detailer nodes. When using `DetailerHookCombine`, the sampler from the first hook is applied.
+  * `LamaRemoverDetailerHookProvider` – Applies Lama Remover to the upscaled image during the detailing stage. If `skip_sampling` is set to True, Lama Remover can be used alone without the detailing stage, allowing it to simply remove detected regions.
+      * Not applicable for **AnimateDiff** detailers. When using `DetailerHookCombine`, `skip_sampling` is only applied if it is set to `True` for all hooks.
+      * To use this node, the node pack at [Layer-norm/comfyui-lama-remover](https://github.com/Layer-norm/comfyui-lama-remover) must be installed.
 
 ### Iterative Upscale nodes
   * `Iterative Upscale (Latent/on Pixel Space)` - The upscaler takes the input upscaler and splits the scale_factor into steps, then iteratively performs upscaling. 
@@ -222,7 +255,7 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
 
 
 ### Impact KSampler
-  * These samplers support basic_pipe and AYS scheduler
+  * These samplers support basic_pipe and AYS/OSS/GITS scheduler
   * `KSampler (pipe)` - pipe version of KSampler
   * `KSampler (advanced/pipe)` - pipe version of KSamplerAdvacned
   * When converting the scheduler widget to input, refer to the `Impact Scheduler Adapter` node to resolve compatibility issues.
@@ -239,6 +272,7 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
   * `Masks to Mask List`, `Mask List to Masks`, `Make Mask List`, `Make Mask Batch` - It has the same functionality as the nodes above, but uses mask as input instead of image.
   * `Flatten Mask Batch` - Flattens a Mask Batch into a single Mask. Normal operation is not guaranteed for non-binary masks. 
   * `Make List (Any)` - Create a list with arbitrary values.
+  * `Select Nth Item (Any list)` - Selects the Nth item from a list. If the index is out of range, it returns the last item in the list. 
 
 ### Logics (experimental) 
   * These nodes are experimental nodes designed to implement the logic for loops and dynamic switching.
@@ -273,6 +307,7 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
       * For supported labels, please refer to the `config.json` of the respective HuggingFace repository.
     * `#Female` and `#Male` are symbols that group multiple labels such as `Female, women, woman, ...`, for convenience, rather than being single labels.
 
+
 ### Etc nodes
   * `Impact Scheduler Adapter` - With the addition of AYS to the scheduler of the Impact Pack and Inspire Pack, there is an issue of incompatibility when the existing scheduler widget is converted to input. The Impact Scheduler Adapter allows for an indirect connection to be possible.
   * `StringListToString` - Convert String List to String
@@ -288,60 +323,25 @@ NOTE: The UltralyticsDetectorProvider node is not part of the ComfyUI-Impact-Pac
   * `List Bridge` - When passing the list output through this node, it collects and organizes the data before forwarding it, which ensures that the previous stage's sub-workflow has been completed.
 
 
-## MMDet nodes (DEPRECATED) - Don't use these nodes
-* MMDetDetectorProvider - Loads the MMDet model to provide BBOX_DETECTOR and SEGM_DETECTOR.
-* To use the existing MMDetDetectorProvider, you need to enable the MMDet usage configuration.
-
-
 ## Feature
 * `Interactive SAM Detector (Clipspace)` - When you right-click on a node that has 'MASK' and 'IMAGE' outputs, a context menu will open. From this menu, you can either open a dialog to create a SAM Mask using 'Open in SAM Detector', or copy the content (likely mask data) using 'Copy (Clipspace)' and generate a mask using 'Impact SAM Detector' from the clipspace menu, and then paste it using 'Paste (Clipspace)'.
 * Providing a feature to detect errors that occur when mixing models and clips from checkpoints such as `SDXL Base`, `SDXL Refiner`, `SD1.x`, `SD2.x` during sample execution, and reporting appropriate errors.
 
 
-## Deprecated
-* The following nodes have been kept only for compatibility with existing workflows, and are no longer supported. Please replace them with new nodes.
-   * ONNX Detector (SEGS) - BBOX Detector (SEGS)
-   * MMDetLoader -> MMDetDetectorProvider
-   * SegsMaskCombine -> SEGS to MASK (combined)
-   * BboxDetectorForEach -> BBOX Detector (SEGS)
-   * SegmDetectorForEach -> SEGM Detector (SEGS)
-   * BboxDetectorCombined -> BBOX Detector (combined)
-   * SegmDetectorCombined -> SEGM Detector (combined)
-   * MaskPainter -> PreviewBridge
-* To use the existing deprecated legacy nodes, you need to enable the MMDet usage configuration.
-
-
-## How to activate 'MMDet usage' (DEPRECATED)
-* Upon the initial execution, an `impact-pack.ini` file will be generated in the custom_nodes/ComfyUI-Impact-Pack directory.
-```
-[default]
-dependency_version = 2
-mmdet_skip = True
-```
-* Change `mmdet_skip = True` to `mmdet_skip = False`
-```
-[default]
-dependency_version = 2
-mmdet_skip = False
-```
-* Restart ComfyUI
-
-
-## Installation
+## How To Install?
 
 ### Install via ComfyUI-Manager (Recommended)
 * Search `ComfyUI Impact Pack` in ComfyUI-Manager and click `Install` button.
 
 ### Manual Install (Not Recommended)
 1. `cd custom_nodes`
-2. `git clone https://github.com/ltdrdata/ComfyUI-Impact-Pack.git`
+2. `git clone https://github.com/ltdrdata/ComfyUI-Impact-Pack`
 3. `cd ComfyUI-Impact-Pack`
-4. (optional) `git clone https://github.com/ltdrdata/ComfyUI-Impact-Subpack impact_subpack`
-   * Impact Pack will automatically download subpack during its initial launch.
-5. (optional) `python install-manual.py`
-   * Impact Pack will automatically install its dependencies during its initial launch.
-   * For the portable version, you should execute the command `..\..\..\python_embeded\python.exe install-manual.py` to run the installation script.
-6. Restart ComfyUI
+4. `pip install -r requirements.txt`
+    * **IMPORTANT**:
+        * You must install it within the Python environment where ComfyUI is running.
+        * For the portable version, use `<installed path>\python_embeded\python.exe -m pip` instead of `pip`. For a `venv`, activate the `venv` first and then use `pip`.
+5. Restart ComfyUI
 
 * NOTE1: If an error occurs during the installation process, please refer to [Troubleshooting Page](troubleshooting/TROUBLESHOOTING.md) for assistance. 
 * NOTE2: You can use this colab notebook [colab notebook](https://colab.research.google.com/github/ltdrdata/ComfyUI-Impact-Pack/blob/Main/notebook/comfyui_colab_impact_pack.ipynb) to launch it. This notebook automatically downloads the impact pack to the custom_nodes directory, installs the tested dependencies, and runs it.
@@ -363,9 +363,6 @@ mmdet_skip = False
    * (deprecated) openmim      # for mim
    * (deprecated) pycocotools  # for mim
    
-* mim install (deprecated)
-   * mmcv==2.0.0, mmdet==3.0.0, mmengine==0.7.2
-
 * linux packages (ubuntu)
   * libgl1-mesa-glx
   * libglib2.0-0
@@ -388,17 +385,16 @@ sam_editor_model = sam_vit_b_01ec64.pth
 ```
 
 
-## Other Materials (auto-download on initial startup)
+## Other Materials (auto-download when installing)
 
-* ComfyUI/models/mmdets/bbox <= https://huggingface.co/dustysys/ddetailer/resolve/main/mmdet/bbox/mmdet_anime-face_yolov3.pth
-* ComfyUI/models/mmdets/bbox <= https://raw.githubusercontent.com/Bing-su/dddetailer/master/config/mmdet_anime-face_yolov3.py
 * ComfyUI/models/sams <= https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth
+
 
 ## Troubleshooting page
 * [Troubleshooting Page](troubleshooting/TROUBLESHOOTING.md)
 
 
-## How to use (DDetailer feature)
+## How To Use (DDetailer feature)
 
 #### 1. Basic auto face detection and refine exapmle.
 ![simple](https://github.com/ltdrdata/ComfyUI-extension-tutorials/raw/Main/ComfyUI-Impact-Pack/images/simple.png)
@@ -496,3 +492,5 @@ BlenderNeok/[ComfyUI_Noise](https://github.com/BlenderNeko/ComfyUI_Noise) - The 
 WASasquatch/[was-node-suite-comfyui](https://github.com/WASasquatch/was-node-suite-comfyui) - A powerful custom node extensions of ComfyUI.
 
 Trung0246/[ComfyUI-0246](https://github.com/Trung0246/ComfyUI-0246) - Nice bypass hack!
+
+Layer-norm/[comfyui-lama-remover](https://github.com/Layer-norm/comfyui-lama-remover) - Required for using `LamaRemoverDetailerHook`.

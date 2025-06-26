@@ -17,11 +17,11 @@ import numpy as np
 import nodes
 from PIL import Image
 import io
-import impact.wildcards as wildcards
 import comfy
 from io import BytesIO
 import random
 from server import PromptServer
+import logging
 
 
 sam_predictor = None
@@ -77,9 +77,13 @@ async def sam_prepare(request):
         if data['sam_model_name'] == 'auto':
             model_name = impact.config.get_config()['sam_editor_model']
 
-        model_name = os.path.join(impact_pack.model_path, "sams", model_name)
+        model_path = folder_paths.get_full_path("sams", model_name)
 
-        print(f"[INFO] ComfyUI-Impact-Pack: Loading SAM model '{impact_pack.model_path}'")
+        if model_path is None:
+            logging.error(f"[Impact Pack] The '{model_name}' model file cannot be found in any sams model path.")
+            return web.Response(status=400)
+
+        logging.info(f"[Impact Pack] Loading SAM model '{model_path}'")
 
         filename, image_dir = folder_paths.annotated_filepath(data["filename"])
 
@@ -92,10 +96,10 @@ async def sam_prepare(request):
         if image_dir is None:
             return web.Response(status=400)
 
-        thread = threading.Thread(target=async_prepare_sam, args=(image_dir, model_name, filename,))
+        thread = threading.Thread(target=async_prepare_sam, args=(image_dir, model_path, filename,))
         thread.start()
 
-        print(f"[INFO] ComfyUI-Impact-Pack: SAM model loaded. ")
+        logging.info("[Impact Pack] SAM model loaded. ")
     return web.Response(status=200)
 
 
@@ -107,7 +111,7 @@ async def release_sam(request):
         del sam_predictor
         sam_predictor = None
 
-    print(f"[INFO] ComfyUI-Impact-Pack: unloading SAM model")
+    logging.info("[Impact Pack]: unloading SAM model")
 
 
 @PromptServer.instance.routes.post("/sam/detect")
@@ -178,7 +182,7 @@ async def wildcards_list(request):
 @PromptServer.instance.routes.post("/impact/wildcards")
 async def populate_wildcards(request):
     data = await request.json()
-    populated = wildcards.process(data['text'], data.get('seed', None))
+    populated = impact.wildcards.process(data['text'], data.get('seed', None))
     return web.json_response({"text": populated})
 
 
@@ -324,20 +328,24 @@ def onprompt_for_switch(json_data):
 
         cls = v['class_type']
         if cls == 'ImpactInversedSwitch':
+            # if 'sel_mode' is 'select_on_prompt'
             if 'sel_mode' in v['inputs'] and v['inputs']['sel_mode'] and 'select' in v['inputs']:
                 select_input = v['inputs']['select']
+                # if 'select' is converted input
                 if isinstance(select_input, list) and len(select_input) == 2:
                     input_node = json_data['prompt'][select_input[0]]
                     if input_node['class_type'] == 'ImpactInt' and 'inputs' in input_node and 'value' in input_node['inputs']:
                         inversed_switch_info[k] = input_node['inputs']['value']
                     else:
-                        print(f"\n##### ##### #####\n[WARN] {cls}: For the 'select' operation, only 'select_index' of the 'ImpactInversedSwitch', which is not an input, or 'ImpactInt' and 'Primitive' are allowed as inputs if 'select_on_prompt' is selected.\n##### ##### #####\n")
+                        logging.warning(f"\n##### ##### #####\n[Impact Pack] {cls}: For the 'select' operation, only 'select_index' of the 'ImpactInversedSwitch', which is not an input, or 'ImpactInt' and 'Primitive' are allowed as inputs if 'select_on_prompt' is selected.\n##### ##### #####\n")
                 else:
                     inversed_switch_info[k] = select_input
 
         elif cls in ['ImpactSwitch', 'LatentSwitch', 'SEGSSwitch', 'ImpactMakeImageList']:
+            # if 'sel_mode' is 'select_on_prompt'
             if 'sel_mode' in v['inputs'] and v['inputs']['sel_mode'] and 'select' in v['inputs']:
                 select_input = v['inputs']['select']
+                # if 'select' is converted input
                 if isinstance(select_input, list) and len(select_input) == 2:
                     input_node = json_data['prompt'][select_input[0]]
                     if input_node['class_type'] == 'ImpactInt' and 'inputs' in input_node and 'value' in input_node['inputs']:
@@ -346,7 +354,7 @@ def onprompt_for_switch(json_data):
                         if isinstance(input_node['inputs']['select'], int):
                             onprompt_switch_info[k] = input_node['inputs']['select']
                         else:
-                            print(f"\n##### ##### #####\n[WARN] {cls}: For the 'select' operation, only 'select_index' of the 'ImpactSwitch', which is not an input, or 'ImpactInt' and 'Primitive' are allowed as inputs if 'select_on_prompt' is selected.\n##### ##### #####\n")
+                            logging.warning(f"\n##### ##### #####\n[Impact Pack] {cls}: For the 'select' operation, only 'select_index' of the 'ImpactSwitch', which is not an input, or 'ImpactInt' and 'Primitive' are allowed as inputs if 'select_on_prompt' is selected.\n##### ##### #####\n")
                 else:
                     onprompt_switch_info[k] = select_input
 
@@ -377,6 +385,8 @@ def onprompt_for_switch(json_data):
                 if vv[0] in inversed_switch_info:
                     if vv[1] + 1 != inversed_switch_info[vv[0]]:
                         disable_targets.add(kk)
+                    else:
+                        del inversed_switch_info[k]
 
                 if vv[0] in disabled_switch:
                     disable_targets.add(kk)
@@ -395,6 +405,11 @@ def onprompt_for_switch(json_data):
 
         for kk in disable_targets:
             del v['inputs'][kk]
+
+    # inversed_switch - select out of range
+    for target in inversed_switch_info.keys():
+        del json_data['prompt'][target]['inputs']['input']
+
 
 def onprompt_for_pickers(json_data):
     detected_pickers = set()
@@ -466,7 +481,17 @@ def onprompt_populate_wildcards(json_data):
     for k, v in prompt.items():
         if 'class_type' in v and (v['class_type'] == 'ImpactWildcardEncode' or v['class_type'] == 'ImpactWildcardProcessor'):
             inputs = v['inputs']
-            if inputs['mode'] and isinstance(inputs['populated_text'], str):
+
+            # legacy adapter
+            if isinstance(inputs['mode'], bool):
+                if inputs['mode']:
+                    new_mode = 'populate'
+                else:
+                    new_mode = 'fixed'
+
+                inputs['mode'] = new_mode
+
+            if inputs['mode'] == 'populate' and isinstance(inputs['populated_text'], str):
                 if isinstance(inputs['seed'], list):
                     try:
                         input_node = prompt[inputs['seed'][0]]
@@ -479,25 +504,30 @@ def onprompt_populate_wildcards(json_data):
                             if not isinstance(input_seed, int):
                                 continue
                         else:
-                            print(f"[Impact Pack] Only `ImpactInt`, `Seed (rgthree)` and `Primitive` Node are allowed as the seed for '{v['class_type']}'. It will be ignored. ")
+                            logging.info(f"[Impact Pack] Only `ImpactInt`, `Seed (rgthree)` and `Primitive` Node are allowed as the seed for '{v['class_type']}'. It will be ignored. ")
                             continue
                     except:
                         continue
                 else:
                     input_seed = int(inputs['seed'])
 
-                inputs['populated_text'] = wildcards.process(inputs['wildcard_text'], input_seed)
-                inputs['mode'] = False
+                inputs['populated_text'] = impact.wildcards.process(inputs['wildcard_text'], input_seed)
+                inputs['mode'] = 'reproduce'
 
                 PromptServer.instance.send_sync("impact-node-feedback", {"node_id": k, "widget_name": "populated_text", "type": "STRING", "value": inputs['populated_text']})
                 updated_widget_values[k] = inputs['populated_text']
+            
+            if inputs['mode'] == 'reproduce':
+                PromptServer.instance.send_sync("impact-node-feedback", {"node_id": k, "widget_name": "mode", "type": "STRING", "value": 'populate'})
+
+
 
     if 'extra_data' in json_data and 'extra_pnginfo' in json_data['extra_data']:
         for node in json_data['extra_data']['extra_pnginfo']['workflow']['nodes']:
             key = str(node['id'])
             if key in updated_widget_values:
                 node['widgets_values'][1] = updated_widget_values[key]
-                node['widgets_values'][2] = False
+                node['widgets_values'][2] = 'reproduce'
 
 
 def onprompt_for_remote(json_data):
@@ -542,7 +572,7 @@ def onprompt(json_data):
         regional_sampler_seed_update(json_data)
         core.current_prompt = json_data
     except Exception as e:
-        print(f"[WARN] ComfyUI-Impact-Pack: Error on prompt - several features will not work.\n{e}")
+        logging.warning(f"[Impact Pack] ComfyUI-Impact-Pack: Error on prompt - several features will not work.\n{e}")
 
     return json_data
 

@@ -48,7 +48,7 @@ preview_bridge_last_mask_cache = {}
 
 current_prompt = None
 
-SCHEDULERS = comfy.samplers.KSampler.SCHEDULERS + ['AYS SDXL', 'AYS SD1', 'AYS SVD', 'GITS[coeff=1.2]', 'LTXV[default]']
+SCHEDULERS = comfy.samplers.KSampler.SCHEDULERS + ['AYS SDXL', 'AYS SD1', 'AYS SVD', 'GITS[coeff=1.2]', 'LTXV[default]', 'OSS FLUX', 'OSS Wan']
 
 
 def is_execution_model_version_supported():
@@ -244,7 +244,8 @@ def enhance_detail(image, model, clip, vae, guide_size, guide_size_for_bbox, max
                    detailer_hook=None,
                    refiner_ratio=None, refiner_model=None, refiner_clip=None, refiner_positive=None,
                    refiner_negative=None, control_net_wrapper=None, cycle=1,
-                   inpaint_model=False, noise_mask_feather=0, scheduler_func=None):
+                   inpaint_model=False, noise_mask_feather=0, scheduler_func=None,
+                   vae_tiled_encode=False, vae_tiled_decode=False):
 
     if noise_mask is not None:
         noise_mask = utils.tensor_gaussian_blur_mask(noise_mask, noise_mask_feather)
@@ -319,6 +320,9 @@ def enhance_detail(image, model, clip, vae, guide_size, guide_size_for_bbox, max
     # upscale
     upscaled_image = tensor_resize(image, new_w, new_h)
 
+    if detailer_hook is not None:
+        upscaled_image = detailer_hook.post_upscale(upscaled_image, noise_mask)
+
     cnet_pils = None
     if control_net_wrapper is not None:
         positive, negative, cnet_pils = control_net_wrapper.apply(positive, negative, upscaled_image, noise_mask)
@@ -326,55 +330,69 @@ def enhance_detail(image, model, clip, vae, guide_size, guide_size_for_bbox, max
         cnet_pils.extend(cnet_pils2)
 
     # prepare mask
-    if noise_mask is not None and inpaint_model:
-        imc_encode = nodes.InpaintModelConditioning().encode
-        if 'noise_mask' in inspect.signature(imc_encode).parameters:
-            positive, negative, latent_image = imc_encode(positive, negative, upscaled_image, vae, mask=noise_mask, noise_mask=True)
+    if detailer_hook is None or not detailer_hook.get_skip_sampling():
+        if noise_mask is not None and inpaint_model:
+            imc_encode = nodes.InpaintModelConditioning().encode
+            if 'noise_mask' in inspect.signature(imc_encode).parameters:
+                positive, negative, latent_image = imc_encode(positive, negative, upscaled_image, vae, mask=noise_mask, noise_mask=True)
+            else:
+                print(f"[Impact Pack] ComfyUI is an outdated version.")
+                positive, negative, latent_image = imc_encode(positive, negative, upscaled_image, vae, noise_mask)
         else:
-            print(f"[Impact Pack] ComfyUI is an outdated version.")
-            positive, negative, latent_image = imc_encode(positive, negative, upscaled_image, vae, noise_mask)
-    else:
-        latent_image = to_latent_image(upscaled_image, vae)
-        if noise_mask is not None:
-            latent_image['noise_mask'] = noise_mask
+            latent_image = to_latent_image(upscaled_image, vae, vae_tiled_encode=vae_tiled_encode)
+            if noise_mask is not None:
+                latent_image['noise_mask'] = noise_mask
 
-    if detailer_hook is not None:
-        latent_image = detailer_hook.post_encode(latent_image)
-
-    refined_latent = latent_image
-
-    # ksampler
-    for i in range(0, cycle):
         if detailer_hook is not None:
+            latent_image = detailer_hook.post_encode(latent_image)
+
+        refined_latent = latent_image
+
+        sampler_opt=None
+        if detailer_hook is not None:
+            sampler_opt = detailer_hook.get_custom_sampler()
+
+        # ksampler
+        for i in range(0, cycle):
             if detailer_hook is not None:
-                detailer_hook.set_steps((i, cycle))
+                if detailer_hook is not None:
+                    detailer_hook.set_steps((i, cycle))
 
-            refined_latent = detailer_hook.cycle_latent(refined_latent)
+                refined_latent = detailer_hook.cycle_latent(refined_latent)
 
-            model2, seed2, steps2, cfg2, sampler_name2, scheduler2, positive2, negative2, upscaled_latent2, denoise2 = \
-                detailer_hook.pre_ksample(model, seed+i, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise)
-            noise, is_touched = detailer_hook.get_custom_noise(seed+i, torch.zeros(latent_image['samples'].size()), is_touched=False)
-            if not is_touched:
+                model2, seed2, steps2, cfg2, sampler_name2, scheduler2, positive2, negative2, upscaled_latent2, denoise2 = \
+                    detailer_hook.pre_ksample(model, seed+i, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise)
+                noise, is_touched = detailer_hook.get_custom_noise(seed+i, torch.zeros(latent_image['samples'].size()), is_touched=False)
+                if not is_touched:
+                    noise = None
+            else:
+                model2, seed2, steps2, cfg2, sampler_name2, scheduler2, positive2, negative2, upscaled_latent2, denoise2 = \
+                    model, seed + i, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise
                 noise = None
+
+            refined_latent = impact_sampling.ksampler_wrapper(model2, seed2, steps2, cfg2, sampler_name2, scheduler2, positive2, negative2,
+                                                              refined_latent, denoise2, refiner_ratio, refiner_model, refiner_clip, refiner_positive, refiner_negative,
+                                                              noise=noise, scheduler_func=scheduler_func, sampler_opt=sampler_opt)
+
+        if detailer_hook is not None:
+            refined_latent = detailer_hook.pre_decode(refined_latent)
+
+        # non-latent downscale - latent downscale cause bad quality
+        start = time.time()
+        if vae_tiled_decode:
+            (refined_image,) = nodes.VAEDecodeTiled().decode(vae, refined_latent, 512) # using default settings
+            print(f"[Impact Pack] vae decoded (tiled) in {time.time() - start:.1f}s")
         else:
-            model2, seed2, steps2, cfg2, sampler_name2, scheduler2, positive2, negative2, upscaled_latent2, denoise2 = \
-                model, seed + i, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise
-            noise = None
-
-        refined_latent = impact_sampling.ksampler_wrapper(model2, seed2, steps2, cfg2, sampler_name2, scheduler2, positive2, negative2,
-                                                          refined_latent, denoise2, refiner_ratio, refiner_model, refiner_clip, refiner_positive, refiner_negative,
-                                                          noise=noise, scheduler_func=scheduler_func)
-
-    if detailer_hook is not None:
-        refined_latent = detailer_hook.pre_decode(refined_latent)
-
-    # non-latent downscale - latent downscale cause bad quality
-    try:
-        # try to decode image normally
-        refined_image = vae.decode(refined_latent['samples'])
-    except Exception as e:
-        #usually an out-of-memory exception from the decode, so try a tiled approach
-        refined_image = vae.decode_tiled(refined_latent["samples"], tile_x=64, tile_y=64, )
+            try:
+                refined_image = vae.decode(refined_latent['samples'])
+            except Exception as e:
+                # usually an out-of-memory exception from the decode, so try a tiled approach
+                print(f"[Impact Pack] failed after {time.time() - start:.1f}s, doing vae.decode_tiled 64...")
+                refined_image = vae.decode_tiled(refined_latent["samples"], tile_x=64, tile_y=64, )
+            print(f"[Impact Pack] vae decoded in {time.time() - start:.1f}s")
+    else:
+        # skipped
+        refined_image = upscaled_image
 
     if detailer_hook is not None:
         refined_image = detailer_hook.post_decode(refined_image)
@@ -506,11 +524,16 @@ def enhance_detail_for_animatediff(image_frames, model, clip, vae, guide_size, g
         'samples': latent_frames
     }
 
+
+    sampler_opt=None
+    if detailer_hook is not None:
+        sampler_opt = detailer_hook.get_custom_sampler()
+
     if detailer_hook is not None:
         latent = detailer_hook.post_encode(latent)
 
     refined_latent = impact_sampling.ksampler_wrapper(model, seed, steps, cfg, sampler_name, scheduler, positive, negative,
-                                                      latent, denoise, refiner_ratio, refiner_model, refiner_clip, refiner_positive, refiner_negative, scheduler_func=scheduler_func)
+                                                      latent, denoise, refiner_ratio, refiner_model, refiner_clip, refiner_positive, refiner_negative, scheduler_func=scheduler_func, sampler_opt=sampler_opt)
 
     if detailer_hook is not None:
         refined_latent = detailer_hook.pre_decode(refined_latent)
@@ -1070,7 +1093,7 @@ class ONNXDetector:
     def detect(self, image, threshold, dilation, crop_factor, drop_size=1, detailer_hook=None):
         drop_size = max(drop_size, 1)
         try:
-            import impact.onnx as onnx
+            import impact.impact_onnx as onnx
 
             h = image.shape[1]
             w = image.shape[2]
@@ -1384,9 +1407,14 @@ def vae_decode(vae, samples, use_tile, hook, tile_size=512, overlap=64):
     return pixels
 
 
-def vae_encode(vae, pixels, use_tile, hook, tile_size=512):
+def vae_encode(vae, pixels, use_tile, hook, tile_size=512, overlap=64):
     if use_tile:
-        samples = nodes.VAEEncodeTiled().encode(vae, pixels, tile_size)[0]
+        encoder = nodes.VAEEncodeTiled()
+        if 'overlap' in inspect.signature(encoder.encode).parameters:
+            samples = encoder.encode(vae, pixels, tile_size, overlap=overlap)[0]
+        else:
+            print(f"[Impact Pack] Your ComfyUI is outdated.")
+            samples = encoder.encode(vae, pixels, tile_size)[0]
     else:
         samples = nodes.VAEEncode().encode(vae, pixels)[0]
 
@@ -1412,7 +1440,7 @@ def latent_upscale_on_pixel_space_shape2(samples, scale_method, w, h, vae, use_t
     if hook is not None:
         pixels = hook.post_upscale(pixels)
 
-    return (vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size), old_pixels)
+    return vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size, overlap=overlap), old_pixels
 
 
 def latent_upscale_on_pixel_space(samples, scale_method, scale_factor, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None, overlap=64):
@@ -1433,7 +1461,7 @@ def latent_upscale_on_pixel_space2(samples, scale_method, scale_factor, vae, use
     if hook is not None:
         pixels = hook.post_upscale(pixels)
 
-    return (vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size), old_pixels)
+    return vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size, overlap=overlap), old_pixels
 
 
 def latent_upscale_on_pixel_space_with_model_shape(samples, scale_method, upscale_model, new_w, new_h, vae, use_tile=False, tile_size=512, save_temp_prefix=None, hook=None, overlap=64):
@@ -1464,7 +1492,7 @@ def latent_upscale_on_pixel_space_with_model_shape2(samples, scale_method, upsca
     if hook is not None:
         pixels = hook.post_upscale(pixels)
 
-    return (vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size), old_pixels)
+    return vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size, overlap=overlap), old_pixels
 
 
 def latent_upscale_on_pixel_space_with_model(samples, scale_method, upscale_model, scale_factor, vae, use_tile=False,
@@ -1500,7 +1528,7 @@ def latent_upscale_on_pixel_space_with_model2(samples, scale_method, upscale_mod
     if hook is not None:
         pixels = hook.post_upscale(pixels)
 
-    return (vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size), old_pixels)
+    return vae_encode(vae, pixels, use_tile, hook, tile_size=tile_size, overlap=overlap), old_pixels
 
 
 class TwoSamplersForMaskUpscaler:
@@ -1670,8 +1698,14 @@ class PixelKSampleUpscaler:
                 preprocessor = nodes.NODE_CLASS_MAPPINGS['TilePreprocessor']()
                 # might add capacity to set pyrUp_iters later, not needed for now though
                 preprocessed = preprocessor.execute(images, pyrUp_iters=3, resolution=min(image_w, image_h))[0]
-                apply_cnet = getattr(nodes.ControlNetApply(), nodes.ControlNetApply.FUNCTION)
-                positive = apply_cnet(positive, self.tile_cnet, preprocessed, strength=self.tile_cnet_strength)[0]
+                positive, negative = nodes.ControlNetApplyAdvanced().apply_controlnet(positive=positive,
+                                                                                      negative=negative,
+                                                                                      control_net=self.tile_cnet,
+                                                                                      image=preprocessed,
+                                                                                      strength=self.tile_cnet_strength,
+                                                                                      start_percent=0,
+                                                                                      end_percent=1.0,
+                                                                                      vae=self.vae)
 
         refined_latent = impact_sampling.impact_sample(model, seed, steps, cfg, sampler_name, scheduler,
                                                        positive, negative, upscaled_latent, denoise, scheduler_func=self.scheduler_func)
@@ -1946,7 +1980,7 @@ class PixelTiledKSampleUpscaler:
     def __init__(self, scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative,
                  denoise,
                  tile_width, tile_height, tiling_strategy,
-                 upscale_model_opt=None, hook_opt=None, tile_cnet_opt=None, tile_size=512, tile_cnet_strength=1.0):
+                 upscale_model_opt=None, hook_opt=None, tile_cnet_opt=None, tile_size=512, tile_cnet_strength=1.0, overlap=64):
         self.params = scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise
         self.vae = vae
         self.tile_params = tile_width, tile_height, tiling_strategy
@@ -1956,6 +1990,7 @@ class PixelTiledKSampleUpscaler:
         self.tile_size = tile_size
         self.is_tiled = True
         self.tile_cnet_strength = tile_cnet_strength
+        self.overlap = overlap
 
     def tiled_ksample(self, latent, images):
         if "BNK_TiledKSampler" in nodes.NODE_CLASS_MAPPINGS:
@@ -1979,8 +2014,14 @@ class PixelTiledKSampleUpscaler:
                 preprocessor = nodes.NODE_CLASS_MAPPINGS['TilePreprocessor']()
                 # might add capacity to set pyrUp_iters later, not needed for now though
                 preprocessed = preprocessor.execute(images, pyrUp_iters=3, resolution=min(image_w, image_h))[0]
-                apply_cnet = getattr(nodes.ControlNetApply(), nodes.ControlNetApply.FUNCTION)
-                positive = apply_cnet(positive, self.tile_cnet, preprocessed, strength=self.tile_cnet_strength)[0]
+
+                positive, negative = nodes.ControlNetApplyAdvanced().apply_controlnet(positive=positive,
+                                                                                      negative=negative,
+                                                                                      control_net=self.tile_cnet,
+                                                                                      image=preprocessed,
+                                                                                      strength=self.tile_cnet_strength,
+                                                                                      start_percent=0, end_percent=1.0,
+                                                                                      vae=self.vae)
 
         return TiledKSampler().sample(model, seed, tile_width, tile_height, tiling_strategy, steps, cfg, sampler_name,
                                       scheduler, positive, negative, latent, denoise)[0]

@@ -28,6 +28,7 @@ import base64
 import impact.wildcards as wildcards
 from . import hooks
 from . import utils
+import inspect
 
 
 try:
@@ -95,9 +96,13 @@ class SAMLoader:
     @classmethod
     def INPUT_TYPES(cls):
         models = [x for x in folder_paths.get_filename_list("sams") if 'hq' not in x]
+
+        if 'ESAM_ModelLoader_Zho' in nodes.NODE_CLASS_MAPPINGS:
+            models.append('ESAM')
+
         return {
             "required": {
-                "model_name": (models + ['ESAM'], {"tooltip": "The detection accuracy varies depending on the SAM model. ESAM can only be used if ComfyUI-YoloWorld-EfficientSAM is installed."}),
+                "model_name": (models, {"tooltip": "The detection accuracy varies depending on the SAM model. ESAM can only be used if ComfyUI-YoloWorld-EfficientSAM is installed."}),
                 "device_mode": (["AUTO", "Prefer GPU", "CPU"], {"tooltip": "AUTO: Only applicable when a GPU is available. It temporarily loads the SAM_MODEL into VRAM only when the detection function is used.\n"
                                                                            "Prefer GPU: Tries to keep the SAM_MODEL on the GPU whenever possible. This can be used when there is sufficient VRAM available.\n"
                                                                            "CPU: Always loads only on the CPU."}),
@@ -191,7 +196,7 @@ class DetailerForEach:
         return {"required": {
                     "image": ("IMAGE", ),
                     "segs": ("SEGS", ),
-                    "model": ("MODEL",),
+                    "model": ("MODEL", {"tooltip": "If the `ImpactDummyInput` is connected to the model, the inference stage is skipped."}),
                     "clip": ("CLIP",),
                     "vae": ("VAE",),
                     "guide_size": ("FLOAT", {"default": 512, "min": 64, "max": nodes.MAX_RESOLUTION, "step": 8}),
@@ -217,6 +222,8 @@ class DetailerForEach:
                     "inpaint_model": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),
                     "noise_mask_feather": ("INT", {"default": 20, "min": 0, "max": 100, "step": 1}),
                     "scheduler_func_opt": ("SCHEDULER_FUNC",),
+                    "tiled_encode": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),
+                    "tiled_decode": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),
                    }
                 }
 
@@ -224,6 +231,8 @@ class DetailerForEach:
     FUNCTION = "doit"
 
     CATEGORY = "ImpactPack/Detailer"
+
+    DESCRIPTION = "It enhances details by inpainting each region within the detected area bundle (SEGS) after enlarging them based on the guide size."
 
     @staticmethod
     def get_core_module():
@@ -233,7 +242,7 @@ class DetailerForEach:
     def do_detail(image, segs, model, clip, vae, guide_size, guide_size_for_bbox, max_size, seed, steps, cfg, sampler_name, scheduler,
                   positive, negative, denoise, feather, noise_mask, force_inpaint, wildcard_opt=None, detailer_hook=None,
                   refiner_ratio=None, refiner_model=None, refiner_clip=None, refiner_positive=None, refiner_negative=None,
-                  cycle=1, inpaint_model=False, noise_mask_feather=0, scheduler_func_opt=None):
+                  cycle=1, inpaint_model=False, noise_mask_feather=0, scheduler_func_opt=None, tiled_encode=False, tiled_decode=False):
 
         if len(image) > 1:
             raise Exception('[Impact Pack] ERROR: DetailerForEach does not allow image batches.\nPlease refer to https://github.com/ltdrdata/ComfyUI-extension-tutorials/blob/Main/ComfyUI-Impact-Pack/tutorial/batching-detailer.md for more information.')
@@ -269,7 +278,7 @@ class DetailerForEach:
         else:
             ordered_segs = segs[1]
 
-        if noise_mask_feather > 0 and 'denoise_mask_function' not in model.model_options:
+        if not (isinstance(model, str) and model == "DUMMY") and noise_mask_feather > 0 and 'denoise_mask_function' not in model.model_options:
             model = nodes_differential_diffusion.DifferentialDiffusion().apply(model)[0]
 
         for i, seg in enumerate(ordered_segs):
@@ -297,13 +306,16 @@ class DetailerForEach:
 
             seg_seed = seed + i if seg_seed is None else seg_seed
 
-            cropped_positive = [
-                [condition, {
-                    k: core.crop_condition_mask(v, image, seg.crop_region) if k == "mask" else v
-                    for k, v in details.items()
-                }]
-                for condition, details in positive
-            ]
+            if not isinstance(positive, str):
+                cropped_positive = [
+                    [condition, {
+                        k: core.crop_condition_mask(v, image, seg.crop_region) if k == "mask" else v
+                        for k, v in details.items()
+                    }]
+                    for condition, details in positive
+                ]
+            else:
+                cropped_positive = positive
 
             if not isinstance(negative, str):
                 cropped_negative = [
@@ -324,16 +336,21 @@ class DetailerForEach:
                 break
 
             orig_cropped_image = cropped_image.clone()
-            enhanced_image, cnet_pils = core.enhance_detail(cropped_image, model, clip, vae, guide_size, guide_size_for_bbox, max_size,
-                                                            seg.bbox, seg_seed, steps, cfg, sampler_name, scheduler,
-                                                            cropped_positive, cropped_negative, denoise, cropped_mask, force_inpaint,
-                                                            wildcard_opt=wildcard_item, wildcard_opt_concat_mode=wildcard_concat_mode,
-                                                            detailer_hook=detailer_hook,
-                                                            refiner_ratio=refiner_ratio, refiner_model=refiner_model,
-                                                            refiner_clip=refiner_clip, refiner_positive=refiner_positive,
-                                                            refiner_negative=refiner_negative, control_net_wrapper=seg.control_net_wrapper,
-                                                            cycle=cycle, inpaint_model=inpaint_model, noise_mask_feather=noise_mask_feather,
-                                                            scheduler_func=scheduler_func_opt)
+            if not (isinstance(model, str) and model == "DUMMY"):
+                enhanced_image, cnet_pils = core.enhance_detail(cropped_image, model, clip, vae, guide_size, guide_size_for_bbox, max_size,
+                                                                seg.bbox, seg_seed, steps, cfg, sampler_name, scheduler,
+                                                                cropped_positive, cropped_negative, denoise, cropped_mask, force_inpaint,
+                                                                wildcard_opt=wildcard_item, wildcard_opt_concat_mode=wildcard_concat_mode,
+                                                                detailer_hook=detailer_hook,
+                                                                refiner_ratio=refiner_ratio, refiner_model=refiner_model,
+                                                                refiner_clip=refiner_clip, refiner_positive=refiner_positive,
+                                                                refiner_negative=refiner_negative, control_net_wrapper=seg.control_net_wrapper,
+                                                                cycle=cycle, inpaint_model=inpaint_model, noise_mask_feather=noise_mask_feather,
+                                                                scheduler_func=scheduler_func_opt, vae_tiled_encode=tiled_encode,
+                                                                vae_tiled_decode=tiled_decode)
+            else:
+                enhanced_image = cropped_image
+                cnet_pils = None
 
             if cnet_pils is not None:
                 cnet_pil_list.extend(cnet_pils)
@@ -376,13 +393,15 @@ class DetailerForEach:
 
     def doit(self, image, segs, model, clip, vae, guide_size, guide_size_for, max_size, seed, steps, cfg, sampler_name,
              scheduler, positive, negative, denoise, feather, noise_mask, force_inpaint, wildcard, cycle=1,
-             detailer_hook=None, inpaint_model=False, noise_mask_feather=0, scheduler_func_opt=None):
+             detailer_hook=None, inpaint_model=False, noise_mask_feather=0, scheduler_func_opt=None,
+             tiled_encode=False, tiled_decode=False):
 
         enhanced_img, *_ = \
             DetailerForEach.do_detail(image, segs, model, clip, vae, guide_size, guide_size_for, max_size, seed, steps,
                                       cfg, sampler_name, scheduler, positive, negative, denoise, feather, noise_mask,
                                       force_inpaint, wildcard, detailer_hook,
-                                      cycle=cycle, inpaint_model=inpaint_model, noise_mask_feather=noise_mask_feather, scheduler_func_opt=scheduler_func_opt)
+                                      cycle=cycle, inpaint_model=inpaint_model, noise_mask_feather=noise_mask_feather, 
+                                      scheduler_func_opt=scheduler_func_opt, tiled_encode=tiled_encode, tiled_decode=tiled_decode)
 
         return (enhanced_img, )
 
@@ -405,7 +424,7 @@ class DetailerForEachPipe:
                       "feather": ("INT", {"default": 5, "min": 0, "max": 100, "step": 1}),
                       "noise_mask": ("BOOLEAN", {"default": True, "label_on": "enabled", "label_off": "disabled"}),
                       "force_inpaint": ("BOOLEAN", {"default": True, "label_on": "enabled", "label_off": "disabled"}),
-                      "basic_pipe": ("BASIC_PIPE", ),
+                      "basic_pipe": ("BASIC_PIPE", {"tooltip": "If the `ImpactDummyInput` is connected to the model in the basic_pipe, the inference stage is skipped."}),
                       "wildcard": ("STRING", {"multiline": True, "dynamicPrompts": False}),
                       "refiner_ratio": ("FLOAT", {"default": 0.2, "min": 0.0, "max": 1.0}),
 
@@ -417,6 +436,8 @@ class DetailerForEachPipe:
                       "inpaint_model": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),
                       "noise_mask_feather": ("INT", {"default": 20, "min": 0, "max": 100, "step": 1}),
                       "scheduler_func_opt": ("SCHEDULER_FUNC",),
+                      "tiled_encode": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),
+                      "tiled_decode": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),
                      }
                 }
 
@@ -427,10 +448,13 @@ class DetailerForEachPipe:
 
     CATEGORY = "ImpactPack/Detailer"
 
+    DESCRIPTION = DetailerForEach.DESCRIPTION
+
     def doit(self, image, segs, guide_size, guide_size_for, max_size, seed, steps, cfg, sampler_name, scheduler,
              denoise, feather, noise_mask, force_inpaint, basic_pipe, wildcard,
              refiner_ratio=None, detailer_hook=None, refiner_basic_pipe_opt=None,
-             cycle=1, inpaint_model=False, noise_mask_feather=0, scheduler_func_opt=None):
+             cycle=1, inpaint_model=False, noise_mask_feather=0, scheduler_func_opt=None,
+             tiled_encode=False, tiled_decode=False):
 
         if len(image) > 1:
             raise Exception('[Impact Pack] ERROR: DetailerForEach does not allow image batches.\nPlease refer to https://github.com/ltdrdata/ComfyUI-extension-tutorials/blob/Main/ComfyUI-Impact-Pack/tutorial/batching-detailer.md for more information.')
@@ -448,7 +472,8 @@ class DetailerForEachPipe:
                                       force_inpaint, wildcard, detailer_hook,
                                       refiner_ratio=refiner_ratio, refiner_model=refiner_model,
                                       refiner_clip=refiner_clip, refiner_positive=refiner_positive, refiner_negative=refiner_negative,
-                                      cycle=cycle, inpaint_model=inpaint_model, noise_mask_feather=noise_mask_feather, scheduler_func_opt=scheduler_func_opt)
+                                      cycle=cycle, inpaint_model=inpaint_model, noise_mask_feather=noise_mask_feather, scheduler_func_opt=scheduler_func_opt,
+                                      tiled_encode=tiled_encode, tiled_decode=tiled_decode)
 
         # set fallback image
         if len(cnet_pil_list) == 0:
@@ -462,7 +487,7 @@ class FaceDetailer:
     def INPUT_TYPES(s):
         return {"required": {
                      "image": ("IMAGE", ),
-                     "model": ("MODEL",),
+                     "model": ("MODEL", {"tooltip": "If the `ImpactDummyInput` is connected to the model, the inference stage is skipped."}),
                      "clip": ("CLIP",),
                      "vae": ("VAE",),
                      "guide_size": ("FLOAT", {"default": 512, "min": 64, "max": nodes.MAX_RESOLUTION, "step": 8}),
@@ -505,6 +530,8 @@ class FaceDetailer:
                     "inpaint_model": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),
                     "noise_mask_feather": ("INT", {"default": 20, "min": 0, "max": 100, "step": 1}),
                     "scheduler_func_opt": ("SCHEDULER_FUNC",),
+                    "tiled_encode": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),
+                    "tiled_decode": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),
                 }}
 
     RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "MASK", "DETAILER_PIPE", "IMAGE")
@@ -514,6 +541,8 @@ class FaceDetailer:
 
     CATEGORY = "ImpactPack/Simple"
 
+    DESCRIPTION = "This node enhances details by automatically detecting specific objects in the input image using detection models (bbox, segm, sam) and regenerating the image by enlarging the detected area based on the guide size.\nAlthough this node is specialized to simplify the commonly used facial detail enhancement workflow, it can also be used for various automatic inpainting purposes depending on the detection model."
+
     @staticmethod
     def enhance_face(image, model, clip, vae, guide_size, guide_size_for_bbox, max_size, seed, steps, cfg, sampler_name, scheduler,
                      positive, negative, denoise, feather, noise_mask, force_inpaint,
@@ -522,7 +551,7 @@ class FaceDetailer:
                      sam_mask_hint_use_negative, drop_size,
                      bbox_detector, segm_detector=None, sam_model_opt=None, wildcard_opt=None, detailer_hook=None,
                      refiner_ratio=None, refiner_model=None, refiner_clip=None, refiner_positive=None, refiner_negative=None, cycle=1,
-                     inpaint_model=False, noise_mask_feather=0, scheduler_func_opt=None):
+                     inpaint_model=False, noise_mask_feather=0, scheduler_func_opt=None, tiled_encode=False, tiled_decode=False):
 
         # make default prompt as 'face' if empty prompt for CLIPSeg
         bbox_detector.setAux('face')
@@ -554,7 +583,8 @@ class FaceDetailer:
                                           refiner_ratio=refiner_ratio, refiner_model=refiner_model,
                                           refiner_clip=refiner_clip, refiner_positive=refiner_positive,
                                           refiner_negative=refiner_negative,
-                                          cycle=cycle, inpaint_model=inpaint_model, noise_mask_feather=noise_mask_feather, scheduler_func_opt=scheduler_func_opt)
+                                          cycle=cycle, inpaint_model=inpaint_model, noise_mask_feather=noise_mask_feather,
+                                          scheduler_func_opt=scheduler_func_opt, tiled_encode=tiled_encode, tiled_decode=tiled_decode)
         else:
             enhanced_img = image
             cropped_enhanced = []
@@ -580,7 +610,8 @@ class FaceDetailer:
              bbox_threshold, bbox_dilation, bbox_crop_factor,
              sam_detection_hint, sam_dilation, sam_threshold, sam_bbox_expansion, sam_mask_hint_threshold,
              sam_mask_hint_use_negative, drop_size, bbox_detector, wildcard, cycle=1,
-             sam_model_opt=None, segm_detector_opt=None, detailer_hook=None, inpaint_model=False, noise_mask_feather=0, scheduler_func_opt=None):
+             sam_model_opt=None, segm_detector_opt=None, detailer_hook=None, inpaint_model=False, noise_mask_feather=0,
+             scheduler_func_opt=None, tiled_encode=False, tiled_decode=False):
 
         result_img = None
         result_mask = None
@@ -598,7 +629,8 @@ class FaceDetailer:
                 bbox_threshold, bbox_dilation, bbox_crop_factor,
                 sam_detection_hint, sam_dilation, sam_threshold, sam_bbox_expansion, sam_mask_hint_threshold,
                 sam_mask_hint_use_negative, drop_size, bbox_detector, segm_detector_opt, sam_model_opt, wildcard, detailer_hook,
-                cycle=cycle, inpaint_model=inpaint_model, noise_mask_feather=noise_mask_feather, scheduler_func_opt=scheduler_func_opt)
+                cycle=cycle, inpaint_model=inpaint_model, noise_mask_feather=noise_mask_feather, scheduler_func_opt=scheduler_func_opt,
+                tiled_encode=tiled_encode, tiled_decode=tiled_decode)
 
             result_img = torch.cat((result_img, enhanced_img), dim=0) if result_img is not None else enhanced_img
             result_mask = torch.cat((result_mask, mask), dim=0) if result_mask is not None else mask
@@ -776,6 +808,26 @@ class CoreMLDetailerHookProvider:
 
     def doit(self, mode):
         hook = hooks.CoreMLHook(mode)
+        return (hook, )
+
+
+class CustomSamplerDetailerHookProvider:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                    "sampler": ("SAMPLER", ),
+                    },
+                }
+
+    RETURN_TYPES = ("DETAILER_HOOK",)
+    FUNCTION = "doit"
+
+    CATEGORY = "ImpactPack/Detailer"
+    
+    DESCRIPTION = "Apply a hook that allows you to use a custom sampler in the Detailer nodes. When using `DetailerHookCombine`, the sampler from the first hook is applied."
+
+    def doit(self, sampler):
+        hook = hooks.CustomSamplerDetailerHookProvider(sampler)
         return (hook, )
 
 
@@ -986,6 +1038,7 @@ class PixelTiledKSampleUpscalerProvider:
                         "pk_hook_opt": ("PK_HOOK", ),
                         "tile_cnet_opt": ("CONTROL_NET", ),
                         "tile_cnet_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                        "overlap": ("INT", {"default": 64, "min": 0, "max": 4096, "step": 32}),
                     }
                 }
 
@@ -995,11 +1048,11 @@ class PixelTiledKSampleUpscalerProvider:
     CATEGORY = "ImpactPack/Upscale"
 
     def doit(self, scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise, tile_width, tile_height, tiling_strategy, upscale_model_opt=None,
-             pk_hook_opt=None, tile_cnet_opt=None, tile_cnet_strength=1.0):
+             pk_hook_opt=None, tile_cnet_opt=None, tile_cnet_strength=1.0, overlap=64):
         if "BNK_TiledKSampler" in nodes.NODE_CLASS_MAPPINGS:
             upscaler = core.PixelTiledKSampleUpscaler(scale_method, model, vae, seed, steps, cfg, sampler_name, scheduler, positive, negative, denoise,
                                                       tile_width, tile_height, tiling_strategy, upscale_model_opt, pk_hook_opt, tile_cnet_opt,
-                                                      tile_size=max(tile_width, tile_height), tile_cnet_strength=tile_cnet_strength)
+                                                      tile_size=max(tile_width, tile_height), tile_cnet_strength=tile_cnet_strength, overlap=overlap)
             return (upscaler, )
         else:
             #utils.try_install_custom_node('https://github.com/BlenderNeko/ComfyUI_TiledKSampler',
@@ -1313,7 +1366,11 @@ class IterativeImageUpscale:
 
         core.update_node_status(unique_id, "VAEEncode (first)", 0)
         if upscaler.is_tiled:
-            latent = nodes.VAEEncodeTiled().encode(vae, pixels, upscaler.tile_size)[0]
+            encoder = nodes.VAEEncodeTiled()
+            if 'overlap' in inspect.signature(encoder.encode).parameters:
+                latent = encoder.encode(vae, pixels, upscaler.tile_size, overlap=upscaler.overlap)[0]
+            else:
+                latent = encoder.encode(vae, pixels, upscaler.tile_size)[0]
         else:
             latent = nodes.VAEEncode().encode(vae, pixels)[0]
 
@@ -1335,7 +1392,7 @@ class FaceDetailerPipe:
     def INPUT_TYPES(s):
         return {"required": {
                     "image": ("IMAGE", ),
-                    "detailer_pipe": ("DETAILER_PIPE",),
+                    "detailer_pipe": ("DETAILER_PIPE", {"tooltip": "If the `ImpactDummyInput` is connected to the model in the detailer_pipe, the inference stage is skipped."}),
                     "guide_size": ("FLOAT", {"default": 512, "min": 64, "max": nodes.MAX_RESOLUTION, "step": 8}),
                     "guide_size_for": ("BOOLEAN", {"default": True, "label_on": "bbox", "label_off": "crop_region"}),
                     "max_size": ("FLOAT", {"default": 1024, "min": 64, "max": nodes.MAX_RESOLUTION, "step": 8}),
@@ -1369,6 +1426,8 @@ class FaceDetailerPipe:
                     "inpaint_model": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),
                     "noise_mask_feather": ("INT", {"default": 20, "min": 0, "max": 100, "step": 1}),
                     "scheduler_func_opt": ("SCHEDULER_FUNC",),
+                    "tiled_encode": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),
+                    "tiled_decode": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),
                    }
                 }
 
@@ -1379,11 +1438,14 @@ class FaceDetailerPipe:
 
     CATEGORY = "ImpactPack/Simple"
 
+    DESCRIPTION = FaceDetailer.DESCRIPTION
+
     def doit(self, image, detailer_pipe, guide_size, guide_size_for, max_size, seed, steps, cfg, sampler_name, scheduler,
              denoise, feather, noise_mask, force_inpaint, bbox_threshold, bbox_dilation, bbox_crop_factor,
              sam_detection_hint, sam_dilation, sam_threshold, sam_bbox_expansion,
              sam_mask_hint_threshold, sam_mask_hint_use_negative, drop_size, refiner_ratio=None,
-             cycle=1, inpaint_model=False, noise_mask_feather=0, scheduler_func_opt=None):
+             cycle=1, inpaint_model=False, noise_mask_feather=0, scheduler_func_opt=None,
+             tiled_encode=False, tiled_decode=False):
 
         result_img = None
         result_mask = None
@@ -1406,7 +1468,8 @@ class FaceDetailerPipe:
                 sam_mask_hint_use_negative, drop_size, bbox_detector, segm_detector, sam_model_opt, wildcard, detailer_hook,
                 refiner_ratio=refiner_ratio, refiner_model=refiner_model,
                 refiner_clip=refiner_clip, refiner_positive=refiner_positive, refiner_negative=refiner_negative,
-                cycle=cycle, inpaint_model=inpaint_model, noise_mask_feather=noise_mask_feather, scheduler_func_opt=scheduler_func_opt)
+                cycle=cycle, inpaint_model=inpaint_model, noise_mask_feather=noise_mask_feather, scheduler_func_opt=scheduler_func_opt,
+                tiled_encode=tiled_encode, tiled_decode=tiled_decode)
 
             result_img = torch.cat((result_img, enhanced_img), dim=0) if result_img is not None else enhanced_img
             result_mask = torch.cat((result_mask, mask), dim=0) if result_mask is not None else mask
@@ -1471,6 +1534,8 @@ class MaskDetailerPipe:
     FUNCTION = "doit"
 
     CATEGORY = "ImpactPack/Detailer"
+
+    DESCRIPTION = ""
 
     def doit(self, image, mask, basic_pipe, guide_size, guide_size_for, max_size, mask_mode,
              seed, steps, cfg, sampler_name, scheduler, denoise,
@@ -1540,7 +1605,7 @@ class DetailerForEachTest(DetailerForEach):
 
     def doit(self, image, segs, model, clip, vae, guide_size, guide_size_for, max_size, seed, steps, cfg, sampler_name,
              scheduler, positive, negative, denoise, feather, noise_mask, force_inpaint, wildcard, detailer_hook=None,
-             cycle=1, inpaint_model=False, noise_mask_feather=0, scheduler_func_opt=None):
+             cycle=1, inpaint_model=False, noise_mask_feather=0, scheduler_func_opt=None, tiled_encode=False, tiled_decode=False):
 
         if len(image) > 1:
             raise Exception('[Impact Pack] ERROR: DetailerForEach does not allow image batches.\nPlease refer to https://github.com/ltdrdata/ComfyUI-extension-tutorials/blob/Main/ComfyUI-Impact-Pack/tutorial/batching-detailer.md for more information.')
@@ -1549,7 +1614,8 @@ class DetailerForEachTest(DetailerForEach):
             DetailerForEach.do_detail(image, segs, model, clip, vae, guide_size, guide_size_for, max_size, seed, steps,
                                       cfg, sampler_name, scheduler, positive, negative, denoise, feather, noise_mask,
                                       force_inpaint, wildcard, detailer_hook,
-                                      cycle=cycle, inpaint_model=inpaint_model, noise_mask_feather=noise_mask_feather, scheduler_func_opt=scheduler_func_opt)
+                                      cycle=cycle, inpaint_model=inpaint_model, noise_mask_feather=noise_mask_feather, 
+                                      scheduler_func_opt=scheduler_func_opt, tiled_encode=tiled_encode, tiled_decode=tiled_decode)
 
         # set fallback image
         if len(cropped) == 0:
@@ -1576,9 +1642,12 @@ class DetailerForEachTestPipe(DetailerForEachPipe):
 
     CATEGORY = "ImpactPack/Detailer"
 
+    DESCRIPTION = DetailerForEach.DESCRIPTION
+
     def doit(self, image, segs, guide_size, guide_size_for, max_size, seed, steps, cfg, sampler_name, scheduler,
              denoise, feather, noise_mask, force_inpaint, basic_pipe, wildcard, cycle=1,
-             refiner_ratio=None, detailer_hook=None, refiner_basic_pipe_opt=None, inpaint_model=False, noise_mask_feather=0, scheduler_func_opt=None):
+             refiner_ratio=None, detailer_hook=None, refiner_basic_pipe_opt=None, inpaint_model=False, noise_mask_feather=0,
+             scheduler_func_opt=None, tiled_encode=False, tiled_decode=False):
 
         if len(image) > 1:
             raise Exception('[Impact Pack] ERROR: DetailerForEach does not allow image batches.\nPlease refer to https://github.com/ltdrdata/ComfyUI-extension-tutorials/blob/Main/ComfyUI-Impact-Pack/tutorial/batching-detailer.md for more information.')
@@ -1597,7 +1666,8 @@ class DetailerForEachTestPipe(DetailerForEachPipe):
                                       refiner_ratio=refiner_ratio, refiner_model=refiner_model,
                                       refiner_clip=refiner_clip, refiner_positive=refiner_positive,
                                       refiner_negative=refiner_negative,
-                                      cycle=cycle, inpaint_model=inpaint_model, noise_mask_feather=noise_mask_feather, scheduler_func_opt=scheduler_func_opt)
+                                      cycle=cycle, inpaint_model=inpaint_model, noise_mask_feather=noise_mask_feather,
+                                      scheduler_func_opt=scheduler_func_opt, tiled_encode=tiled_encode, tiled_decode=tiled_decode)
 
         # set fallback image
         if len(cropped) == 0:
@@ -1833,6 +1903,135 @@ def get_file_item(base_type, path):
             "subfolder": subfolder,
             "type": path_type
            }
+
+
+class MaskRectArea:
+    # Creates a rectangle mask using percentage.
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+            },
+            "hidden": {"extra_pnginfo": "EXTRA_PNGINFO", "unique_id": "UNIQUE_ID"}
+        }
+
+    RETURN_TYPES = ("MASK",)
+    
+    CATEGORY = "ImpactPack/Operation"
+    FUNCTION = "create_mask"
+
+    def create_mask(self, extra_pnginfo, unique_id, **kwargs):
+        # search for node
+        node_found = False
+        for node in extra_pnginfo["workflow"]["nodes"]:
+            if str(node["id"]) == unique_id:
+                min_x = node["properties"].get("x", 0) / 100
+                min_y = node["properties"].get("y", 0) / 100
+                width = node["properties"].get("w", 0) / 100
+                height = node["properties"].get("h", 0) / 100
+                blur_radius = node["properties"].get("blur_radius", 0)
+                node_found = True
+                break
+                
+        if not node_found:
+            raise ValueError(f"No node found with unique_id {unique_id}.")
+                
+        # Create a mask with standard resolution (e.g., 512x512)
+        resolution = 512
+        mask = torch.zeros((resolution, resolution))
+
+        # Calculate pixel coordinates
+        min_x_px = int(min_x * resolution)
+        min_y_px = int(min_y * resolution)
+        max_x_px = int((min_x + width) * resolution)
+        max_y_px = int((min_y + height) * resolution)
+
+        # Draw the rectangle on the mask
+        mask[min_y_px:max_y_px, min_x_px:max_x_px] = 1
+
+        # Apply blur if the radii are greater than 0
+        if blur_radius > 0:
+            dx = blur_radius * 2 + 1
+            dy = blur_radius * 2 + 1
+
+            # Convert the mask to a format compatible with OpenCV (numpy array)
+            mask_np = mask.cpu().numpy().astype("float32")
+
+            # Apply Gaussian Blur
+            blurred_mask = cv2.GaussianBlur(mask_np, (dx, dy), 0)
+
+            # Convert back to tensor
+            mask = torch.from_numpy(blurred_mask)
+
+        # Return the mask as a tensor with an additional channel
+        return (mask.unsqueeze(0),)
+
+
+class MaskRectAreaAdvanced:
+    # Creates a rectangle mask using pixels relative to image size.
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+            },
+            "hidden": {"extra_pnginfo": "EXTRA_PNGINFO", "unique_id": "UNIQUE_ID"}
+        }
+
+    RETURN_TYPES = ("MASK",)
+    
+    CATEGORY = "ImpactPack/Operation"
+    FUNCTION = "create_mask_advanced"
+
+    def create_mask_advanced(self, extra_pnginfo, unique_id, **kwargs):
+        # search for node
+        node_found = False
+        for node in extra_pnginfo["workflow"]["nodes"]:
+            if node["id"] == int(unique_id):
+                min_x = node["properties"]["x"]
+                min_y = node["properties"]["y"]
+                width = node["properties"]["w"]
+                height = node["properties"]["h"]
+                image_width = node["properties"]["width"]
+                image_height = node["properties"]["height"]
+                blur_radius = node["properties"]["blur_radius"]
+                node_found = True
+                break
+                
+        if not node_found:
+            raise ValueError(f"No node found with unique_id {unique_id}.")
+
+        # Calculate maximum coordinates
+        max_x = min_x + width
+        max_y = min_y + height
+
+        # Create a mask with the image dimensions
+        mask = torch.zeros((image_height, image_width))
+
+        # Draw the rectangle on the mask
+        mask[int(min_y):int(max_y), int(min_x):int(max_x)] = 1
+
+        # Apply blur if the radii are greater than 0
+        if blur_radius > 0:
+            dx = blur_radius * 2 + 1
+            dy = blur_radius * 2 + 1
+
+            # Convert the mask to a format compatible with OpenCV (numpy array)
+            mask_np = mask.cpu().numpy().astype("float32")
+
+            # Apply Gaussian Blur
+            blurred_mask = cv2.GaussianBlur(mask_np, (dx, dy), 0)
+
+            # Convert back to tensor
+            mask = torch.from_numpy(blurred_mask)
+
+        # Return the mask as a tensor with an additional channel
+        return (mask.unsqueeze(0),)
 
 
 class ImageReceiver:
@@ -2181,7 +2380,11 @@ class ImpactWildcardProcessor:
         return {"required": {
                         "wildcard_text": ("STRING", {"multiline": True, "dynamicPrompts": False, "tooltip": "Enter a prompt using wildcard syntax."}),
                         "populated_text": ("STRING", {"multiline": True, "dynamicPrompts": False, "tooltip": "The actual value passed during the execution of 'ImpactWildcardProcessor' is what is shown here. The behavior varies slightly depending on the mode. Wildcard syntax can also be used in 'populated_text'."}),
-                        "mode": ("BOOLEAN", {"default": True, "label_on": "Populate", "label_off": "Fixed", "tooltip": "Populate: Before running the workflow, it overwrites the existing value of 'populated_text' with the prompt processed from 'wildcard_text'. In this mode, 'populated_text' cannot be edited.\nFixed: Ignores wildcard_text and keeps 'populated_text' as is. You can edit 'populated_text' in this mode."}),
+                        "mode": (["populate", "fixed", "reproduce"], {"default": "populate", "tooltip":
+                            "populate: Before running the workflow, it overwrites the existing value of 'populated_text' with the prompt processed from 'wildcard_text'. In this mode, 'populated_text' cannot be edited.\n"
+                            "fixed: Ignores wildcard_text and keeps 'populated_text' as is. You can edit 'populated_text' in this mode.\n"
+                            "reproduce: This mode operates as 'fixed' mode only once for reproduction, and then it switches to 'populate' mode."
+                            }),
                         "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "tooltip": "Determines the random seed to be used for wildcard processing."}),
                         "Select to add Wildcard": (["Select the Wildcard to add to the text"],),
                     },
@@ -2190,9 +2393,10 @@ class ImpactWildcardProcessor:
     CATEGORY = "ImpactPack/Prompt"
 
     DESCRIPTION = ("The 'ImpactWildcardProcessor' processes text prompts written in wildcard syntax and outputs the processed text prompt.\n\n"
-                   "TIP: Before the workflow is executed, the processing result of 'wildcard_text' is displayed in 'populated_text', and the populated text is saved along with the workflow. If you want to use a seed converted as input, write the prompt directly in 'populated_text' instead of 'wildcard_text', and set the mode to 'Fixed'.")
+                   "TIP: Before the workflow is executed, the processing result of 'wildcard_text' is displayed in 'populated_text', and the populated text is saved along with the workflow. If you want to use a seed converted as input, write the prompt directly in 'populated_text' instead of 'wildcard_text', and set the mode to 'fixed'.")
 
     RETURN_TYPES = ("STRING", )
+    RETURN_NAMES = ("processed text",)
     FUNCTION = "doit"
 
     @staticmethod
@@ -2212,8 +2416,10 @@ class ImpactWildcardEncode:
                         "clip": ("CLIP",),
                         "wildcard_text": ("STRING", {"multiline": True, "dynamicPrompts": False, "tooltip": "Enter a prompt using wildcard syntax."}),
                         "populated_text": ("STRING", {"multiline": True, "dynamicPrompts": False, "tooltip": "The actual value passed during the execution of 'ImpactWildcardEncode' is what is shown here. The behavior varies slightly depending on the mode. Wildcard syntax can also be used in 'populated_text'."}),
-                        "mode": ("BOOLEAN", {"default": True, "label_on": "Populate", "label_off": "Fixed", "tooltip": "Populate: Before running the workflow, it overwrites the existing value of 'populated_text' with the prompt processed from 'wildcard_text'. In this mode, 'populated_text' cannot be edited.\n"
-                                                                                                                       "Fixed: Ignores wildcard_text and keeps 'populated_text' as is. You can edit 'populated_text' in this mode."}),
+                        "mode": (["populate", "fixed", "reproduce"], {"tooltip": 
+                            "populate: Before running the workflow, it overwrites the existing value of 'populated_text' with the prompt processed from 'wildcard_text'. In this mode, 'populated_text' cannot be edited.\n"
+                            "fixed: Ignores wildcard_text and keeps 'populated_text' as is. You can edit 'populated_text' in this mode\n."
+                            "reproduce: This mode operates as 'fixed' mode only once for reproduction, and then it switches to 'populate' mode."}),
                         "Select to add LoRA": (["Select the LoRA to add to the text"] + folder_paths.get_filename_list("loras"), ),
                         "Select to add Wildcard": (["Select the Wildcard to add to the text"], ),
                         "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "tooltip": "Determines the random seed to be used for wildcard processing."}),
@@ -2223,7 +2429,7 @@ class ImpactWildcardEncode:
     CATEGORY = "ImpactPack/Prompt"
 
     DESCRIPTION = ("The 'ImpactWildcardEncode' node processes text prompts written in wildcard syntax and outputs them as conditioning. It also supports LoRA syntax, with the applied LoRA reflected in the model's output.\n\n"
-                   "TIP1: Before the workflow is executed, the processing result of 'wildcard_text' is displayed in 'populated_text', and the populated text is saved along with the workflow. If you want to use a seed converted as input, write the prompt directly in 'populated_text' instead of 'wildcard_text', and set the mode to 'Fixed'.\n"
+                   "TIP1: Before the workflow is executed, the processing result of 'wildcard_text' is displayed in 'populated_text', and the populated text is saved along with the workflow. If you want to use a seed converted as input, write the prompt directly in 'populated_text' instead of 'wildcard_text', and set the mode to 'fixed'.\n"
                    "TIP2: If the 'Inspire Pack' is installed, LBW(LoRA Block Weight) syntax can also be applied.")
 
     RETURN_TYPES = ("MODEL", "CLIP", "CONDITIONING", "STRING")
@@ -2250,7 +2456,7 @@ class ImpactSchedulerAdapter:
     def INPUT_TYPES(s):
         return {"required": {
             "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"defaultInput": True, }),
-            "extra_scheduler": (['None', 'AYS SDXL', 'AYS SD1', 'AYS SVD', 'GITS[coeff=1.2]', 'LTXV[default]'],),
+            "extra_scheduler": (['None', 'AYS SDXL', 'AYS SD1', 'AYS SVD', 'GITS[coeff=1.2]', 'LTXV[default]', 'OSS FLUX', 'OSS Wan'],),
         }}
 
     CATEGORY = "ImpactPack/Util"

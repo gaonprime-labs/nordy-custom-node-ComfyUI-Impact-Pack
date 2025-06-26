@@ -18,7 +18,6 @@ modules_path = os.path.join(os.path.dirname(__file__), "modules")
 sys.path.append(modules_path)
 
 import impact.config
-import impact.sample_error_enhancer
 print(f"### Loading: ComfyUI-Impact-Pack ({impact.config.version})")
 
 # Core
@@ -123,6 +122,8 @@ NODE_CLASS_MAPPINGS = {
     "UnsamplerHookProvider": UnsamplerHookProvider,
     "CoreMLDetailerHookProvider": CoreMLDetailerHookProvider,
     "PreviewDetailerHookProvider": PreviewDetailerHookProvider,
+    "CustomSamplerDetailerHookProvider": CustomSamplerDetailerHookProvider,
+    "LamaRemoverDetailerHookProvider": LamaRemoverDetailerHookProvider,
 
     "DetailerHookCombine": DetailerHookCombine,
     "NoiseInjectionDetailerHookProvider": NoiseInjectionDetailerHookProvider,
@@ -137,6 +138,8 @@ NODE_CLASS_MAPPINGS = {
     "BitwiseAndMask": BitwiseAndMask,
     "SubtractMask": SubtractMask,
     "AddMask": AddMask,
+    "MaskRectArea": MaskRectArea,
+    "MaskRectAreaAdvanced": MaskRectAreaAdvanced,
     "ImpactSegsAndMask": SegsBitwiseAndMask,
     "ImpactSegsAndMaskForEach": SegsBitwiseAndMaskForEach,
     "EmptySegs": EmptySEGS,
@@ -233,6 +236,7 @@ NODE_CLASS_MAPPINGS = {
     "ImpactMakeAnyList": MakeAnyList,
     "ImpactMakeMaskList": MakeMaskList,
     "ImpactMakeMaskBatch": MakeMaskBatch,
+    "ImpactSelectNthItemOfAnyList": NthItemOfAnyList,
 
     "RegionalSampler": RegionalSampler,
     "RegionalSamplerAdvanced": RegionalSamplerAdvanced,
@@ -246,6 +250,8 @@ NODE_CLASS_MAPPINGS = {
     "ImpactSEGSLabelFilter": SEGSLabelFilter,
     "ImpactSEGSRangeFilter": SEGSRangeFilter,
     "ImpactSEGSOrderedFilter": SEGSOrderedFilter,
+    "ImpactSEGSIntersectionFilter": SEGSIntersectionFilter,
+    "ImpactSEGSNMSFilter": SEGSNMSFilter,
 
     "ImpactCompare": ImpactCompare,
     "ImpactConditionalBranch": ImpactConditionalBranch,
@@ -318,6 +324,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "BitwiseAndMask": "Pixelwise(MASK & MASK)",
     "SubtractMask": "Pixelwise(MASK - MASK)",
     "AddMask": "Pixelwise(MASK + MASK)",
+    "MaskRectArea": "Mask Rect Area",
+    "MaskRectAreaAdvanced": "Mask Rect Area (Advanced)",
     "ImpactFlattenMask": "Flatten Mask Batch",
     "DetailerForEach": "Detailer (SEGS)",
     "DetailerForEachPipe": "Detailer (SEGS/pipe)",
@@ -359,6 +367,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ImpactSEGSLabelFilter": "SEGS Filter (label)",
     "ImpactSEGSRangeFilter": "SEGS Filter (range)",
     "ImpactSEGSOrderedFilter": "SEGS Filter (ordered)",
+    "ImpactSEGSIntersectionFilter": "SEGS Filter (intersection)",
+    "ImpactSEGSNMSFilter": "SEGS Filter (non max suppression)",
     "ImpactSEGSConcat": "SEGS Concat",
     "ImpactSEGSToMaskList": "SEGS to Mask List",
     "ImpactSEGSToMaskBatch": "SEGS to Mask Batch",
@@ -400,6 +410,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ImpactMakeMaskList": "Make Mask List",
     "ImpactMakeMaskBatch": "Make Mask Batch",
     "ImpactMakeAnyList": "Make List (Any)",
+    "ImpactSelectNthItemOfAnyList": "Select Nth Item (Any list)",
 
     "ImpactStringSelector": "String Selector",
     "StringListToString": "String List to String",
