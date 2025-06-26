@@ -461,12 +461,11 @@ def process_with_loras(wildcard_opt, model, clip, clip_encoder=None, seed=None, 
                 def default_lora():
                     return nodes.LoraLoader().load_lora(model, clip, lora_name, model_weight, clip_weight)
 
-            if lbw is not None:
-                if 'LoraLoaderBlockWeight //Inspire' not in nodes.NODE_CLASS_MAPPINGS:
-                    #utils.try_install_custom_node(
-                    #    'https://github.com/ltdrdata/ComfyUI-Inspire-Pack',
-                    #    "To use 'LBW=' syntax in wildcards, 'Inspire Pack' extension is required.")
-                    #노르디의 ComfyUI를 멋대로 제부팅하여 커스텀 노드를 CPU단에 설치하는 문제가 있어서 해당 부분 주석 처리 -원경(241008)
+                if lbw is not None:
+                    if 'LoraLoaderBlockWeight //Inspire' not in nodes.NODE_CLASS_MAPPINGS:
+                        utils.try_install_custom_node(
+                            'https://github.com/ltdrdata/ComfyUI-Inspire-Pack',
+                            "To use 'LBW=' syntax in wildcards, 'Inspire Pack' extension is required.")
 
                         logging.warning(f"'LBW(Lora Block Weight)' is given, but the 'Inspire Pack' is not installed. The LBW= attribute is being ignored.")
                         model, clip = default_lora()
