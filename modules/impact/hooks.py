@@ -10,6 +10,7 @@ import folder_paths
 import os
 from comfy_extras import nodes_custom_sampler
 import math
+import logging
 
 
 class PixelKSampleHook:
@@ -117,6 +118,9 @@ class DetailerHookCombine(PixelKSampleHookCombine):
 
     def get_skip_sampling(self):
         return self.hook1.get_skip_sampling() and self.hook2.get_skip_sampling()
+    
+    def should_retry_patch(self, patch):
+        return self.hook1.should_retry_patch(patch) or self.hook2.should_retry_patch(patch)
 
 
 class SimpleCfgScheduleHook(PixelKSampleHook):
@@ -186,6 +190,9 @@ class DetailerHook(PixelKSampleHook):
         return None
 
     def get_skip_sampling(self):
+        return False
+    
+    def should_retry_patch(self, patch):
         return False
 
 
@@ -340,7 +347,7 @@ class InjectNoiseHook(PixelKSampleHook):
 
         strength = self.start_strength + (self.end_strength - self.start_strength) * cur_step / self.total_step
         samples = InjectNoise().inject_noise(samples, strength, noise, mask)[0]
-        print(f"[Impact Pack] InjectNoiseHook: strength = {strength}")
+        logging.info(f"[Impact Pack] InjectNoiseHook: strength = {strength}")
 
         if mask is not None:
             samples['noise_mask'] = mask
@@ -371,7 +378,7 @@ class UnsamplerHook(PixelKSampleHook):
         end_at_step = self.start_end_at_step + (self.end_end_at_step - self.start_end_at_step) * cur_step / self.total_step
         end_at_step = int(end_at_step)
 
-        print(f"[Impact Pack] UnsamplerHook: end_at_step = {end_at_step}")
+        logging.info(f"[Impact Pack] UnsamplerHook: end_at_step = {end_at_step}")
 
         # inj noise
         mask = None
@@ -561,5 +568,30 @@ class PreviewDetailerHook(DetailerHook):
         PromptServer.instance.send_sync("impact-preview", {'node_id': self.node_id, 'item': item})
 
     def post_paste(self, image):
-        asyncio.run(self.send(image))
+        loop = asyncio.get_running_loop()
+        loop.create_task(self.send(image))
         return image
+
+
+class BlackPatchRetryHook(DetailerHook):
+    def __init__(self, mean_thresh, var_thresh):
+        super().__init__()
+        assert 0 <= mean_thresh <= 255 and 0 <= var_thresh <= 255
+        self.mean_thresh = mean_thresh
+        self.var_thresh = var_thresh
+
+    def should_retry_patch(self, cropped_region):
+        # remove the first dimension (batch_size)
+        if cropped_region.ndim == 4:
+            assert cropped_region.shape[0] == 1
+            cropped_region = cropped_region.squeeze(0)
+        
+        # turn image to grayscape
+        if cropped_region.ndim == 3:
+            assert cropped_region.shape[-1] in [1, 3]
+            cropped_region = cropped_region.mean(axis=-1)  # simple average grayscale
+
+        mean = cropped_region.mean()
+        var = cropped_region.var()
+
+        return (mean <= self.mean_thresh/255) and (var <= self.var_thresh/255)
