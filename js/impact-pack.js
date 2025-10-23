@@ -3,11 +3,11 @@ import { ComfyDialog, $el } from "../../scripts/ui.js";
 import { api } from "../../scripts/api.js";
 import { customAlert, isBeforeFrontendVersion } from "./common.js";
 
-const is_legacy_front = () => isBeforeFrontendVersion('1.16.9');
+// const is_legacy_front = () => isBeforeFrontendVersion('1.16.9');
 
-if(is_legacy_front()) {
-	customAlert("An outdated version(<1.16.9) of the `comfyui-frontend-package` is installed. It is not compatible with the current version of the Impact Pack.");
-}
+// if(is_legacy_front()) {
+// 	customAlert("An outdated version(<1.16.9) of the `comfyui-frontend-package` is installed. It is not compatible with the current version of the Impact Pack.");
+// }
 
 let wildcards_list = [];
 async function load_wildcards() {

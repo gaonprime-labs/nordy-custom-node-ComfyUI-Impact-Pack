@@ -679,16 +679,17 @@ def flatten_mask(all_masks):
 
     return merged_mask
 
-
+'''
 def try_install_custom_node(custom_node_url, msg):
     try:
         import cm_global
         cm_global.try_call(api='cm.try-install-custom-node',
                            sender="Impact Pack", custom_node_url=custom_node_url, msg=msg)
     except Exception:
-        logging.info(msg)
-        logging.info("[Impact Pack] ComfyUI-Manager is outdated. The custom node installation feature is not available.")
-
+        print(msg)
+        print(f"[Impact Pack] ComfyUI-Manager is outdated. The custom node installation feature is not available.")
+'''
+#노르디의 ComfyUI를 멋대로 제부팅하여 커스텀 노드를 CPU단에 설치하는 문제가 있어서 해당 부분 주석 처리 -원경(241008)
 
 # author: Trung0246 --->
 class TautologyStr(str):
